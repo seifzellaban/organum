@@ -34,6 +34,8 @@ class Envelope:
         "_release_pos",
         "_release_start_level",
         "_attack_curve",
+        "_attack_start_level",
+        "_release_pending",
     )
 
     def __init__(
@@ -59,16 +61,28 @@ class Envelope:
         self._decay_pos = 0
         self._release_pos = 0
         self._release_start_level = 0.0
+        self._attack_start_level = 0.0
+        self._release_pending = False
 
     def note_on(self) -> None:
         self._stage = Stage.ATTACK
         self._attack_pos = 0
+        self._attack_start_level = self._level
+        self._release_pending = False
 
     def note_off(self) -> None:
+        min_samples = int(0.015 * self._sample_rate)
+        limit = min(min_samples, self._attack_samples)
+        
+        if self._stage == Stage.ATTACK and self._attack_pos < limit:
+            self._release_pending = True
+            return
+
         if self._stage != Stage.IDLE:
             self._stage = Stage.RELEASE
             self._release_pos = 0
             self._release_start_level = self._level
+            self._release_pending = False
 
     @property
     def is_active(self) -> bool:
@@ -93,16 +107,38 @@ class Envelope:
                 # Exponential attack curve — starts slow, accelerates
                 t = np.arange(self._attack_pos, self._attack_pos + n,
                               dtype=np.float32) / self._attack_samples
-                curve = t ** self._attack_curve
-                out[pos:pos + n] = curve
+                curve_shape = t ** self._attack_curve
+                
+                # Interpolate from start level to 1.0
+                curr_vals = self._attack_start_level + (1.0 - self._attack_start_level) * curve_shape
+                
+                out[pos:pos + n] = curr_vals
                 self._attack_pos += n
-                self._level = float(curve[-1])
+                self._level = float(curr_vals[-1])
                 pos += n
+                
+                # Handle deferred release (minimum duration check)
+                if self._release_pending:
+                    min_samples = int(0.015 * self._sample_rate)
+                    limit = min(min_samples, self._attack_samples)
+                    
+                    if self._attack_pos >= limit:
+                        self._stage = Stage.RELEASE
+                        self._release_pos = 0
+                        self._release_start_level = self._level
+                        self._release_pending = False
+                        continue
 
                 if self._attack_pos >= self._attack_samples:
-                    self._level = 1.0
-                    self._stage = Stage.DECAY
-                    self._decay_pos = 0
+                    if self._release_pending:
+                         self._stage = Stage.RELEASE
+                         self._release_pos = 0
+                         self._release_start_level = 1.0
+                         self._release_pending = False
+                    else:
+                        self._level = 1.0
+                        self._stage = Stage.DECAY
+                        self._decay_pos = 0
 
             elif self._stage == Stage.DECAY:
                 n = min(remaining, self._decay_samples - self._decay_pos)

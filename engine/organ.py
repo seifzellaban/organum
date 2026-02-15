@@ -134,6 +134,18 @@ class OrganVoice:
 
         self._envelope.note_on()
 
+    def note_on(self) -> None:
+        """Retrigger the note (e.g. repeated key press)."""
+        # Reset tracker click
+        self._tracker_click_left = int(self.TRACKER_CLICK_MS * self._sample_rate / 1000)
+        self._tracker_click_phase = 0.0
+        
+        if self._chiff_amount > 0:
+            self._chiff_samples_left = int(15.0 * self._sample_rate / 1000) # Default duration
+            self._chiff_pos = np.random.randint(0, _CHIFF_TABLE_SIZE - 4096)
+
+        self._envelope.note_on()
+
     def note_off(self) -> None:
         self._envelope.note_off()
 

@@ -257,7 +257,8 @@ class Mixer:
         self.sample_rate = sample_rate
         self.event_queue: SimpleQueue[AudioEvent] = SimpleQueue()
 
-        self._voices: dict[int, OrganVoice] = {}
+        self._active_voices: dict[int, OrganVoice] = {}
+        self._releasing_voices: list[OrganVoice] = []
 
         # FULL CATHEDRAL REGISTRATION
         self._drawbar_values: list[float] = [
@@ -295,31 +296,48 @@ class Mixer:
 
             if event.type == EventType.NOTE_ON:
                 note = event.data
-                if note in self._voices:
-                    self._voices[note].note_off()
+                # If note is already playing, move it to releasing voices
+                if note in self._active_voices:
+                    voice = self._active_voices.pop(note)
+                    voice.note_off()
+                    self._releasing_voices.append(voice)
 
-                # Voice stealing: if at max, kill the quietest releasing voice
-                if len(self._voices) >= MAX_VOICES:
-                    # Find a releasing (not actively held) voice to steal
-                    oldest_note = None
-                    for vn, vv in self._voices.items():
-                        if not vv.is_active:
-                            oldest_note = vn
-                            break
-                    if oldest_note is None:
-                        # All voices active — steal first one
-                        oldest_note = next(iter(self._voices))
-                    del self._voices[oldest_note]
+                # Check if we have a releasing voice for this note to recycle
+                existing_voice = None
+                for i, v in enumerate(self._releasing_voices):
+                    if v.note == note:
+                        existing_voice = self._releasing_voices.pop(i)
+                        break
+                
+                if existing_voice:
+                    # Recycle the voice!
+                    self._active_voices[note] = existing_voice
+                    existing_voice.note_on()
+                else:
+                    # Create new voice
+                    # Managing max polyphony (active + releasing)
+                    total_voices = len(self._active_voices) + len(self._releasing_voices)
+                    if total_voices >= MAX_VOICES:
+                        # Steal from releasing voices first
+                        if self._releasing_voices:
+                            # Remove oldest release
+                            self._releasing_voices.pop(0)
+                        else:
+                            # Steal an active voice
+                            oldest_note = next(iter(self._active_voices))
+                            del self._active_voices[oldest_note]
 
-                stop_defs = list(self._active_stop_defs.values())
-                self._voices[note] = OrganVoice(
-                    note, self.sample_rate, stop_defs=stop_defs
-                )
+                    stop_defs = list(self._active_stop_defs.values())
+                    self._active_voices[note] = OrganVoice(
+                        note, self.sample_rate, stop_defs=stop_defs
+                    )
 
             elif event.type == EventType.NOTE_OFF:
                 note = event.data
-                if note in self._voices:
-                    self._voices[note].note_off()
+                if note in self._active_voices:
+                    voice = self._active_voices.pop(note)
+                    voice.note_off()
+                    self._releasing_voices.append(voice)
 
             elif event.type == EventType.DRAWBAR_CHANGE:
                 idx, value = event.data
@@ -346,17 +364,25 @@ class Mixer:
         active_count = 0
 
         if stop_profiles:
-            dead_notes: list[int] = []
-            for note, voice in self._voices.items():
+            # Render active voices
+            for voice in self._active_voices.values():
+                mono += voice.render(num_frames, self._drawbar_values, stop_profiles)
+                has_voices = True
+                active_count += 1
+            
+            # Render releasing voices and cleanup dead ones
+            dead_indices = []
+            for i, voice in enumerate(self._releasing_voices):
                 if voice.is_active:
                     mono += voice.render(num_frames, self._drawbar_values, stop_profiles)
                     has_voices = True
                     active_count += 1
                 else:
-                    dead_notes.append(note)
-
-            for note in dead_notes:
-                del self._voices[note]
+                    dead_indices.append(i)
+            
+            # Remove dead voices in reverse order
+            for i in reversed(dead_indices):
+                self._releasing_voices.pop(i)
 
         # Voice normalization
         if active_count > 1:
