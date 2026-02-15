@@ -18,6 +18,7 @@ _t = np.arange(TABLE_SIZE, dtype=np.float64) / TABLE_SIZE
 # Band-limited wavetable generation
 # --------------------------------------------------------------------------
 
+
 def _make_sine() -> np.ndarray:
     return np.sin(2.0 * np.pi * _t).astype(np.float32)
 
@@ -50,7 +51,7 @@ def _make_reed(max_harmonics: int = 19) -> np.ndarray:
     """Reed / trumpet — very rich harmonics, almost sawtooth-like."""
     w = np.zeros(TABLE_SIZE, dtype=np.float64)
     for k in range(1, min(max_harmonics + 1, 20)):
-        amp = 1.0 / k * (0.92 ** k)
+        amp = 1.0 / k * (0.92**k)
         w += amp * np.sin(2 * np.pi * k * _t)
     if np.max(np.abs(w)) > 0:
         w /= np.max(np.abs(w))
@@ -76,6 +77,7 @@ def _make_string(max_harmonics: int = 15) -> np.ndarray:
 # Tier boundaries: (max_frequency_for_this_tier, table)
 # At a given oscillator frequency, pick the first tier whose max_freq > osc_freq.
 # If osc_freq exceeds all tiers, fall back to sine.
+
 
 def _build_tiers(make_fn, harmonic_counts: list[int], sample_rate: int = 44100) -> list:
     """Build band-limited tiers: (max_freq, table) pairs.
@@ -121,8 +123,13 @@ class Oscillator:
     """Phase-accumulator oscillator with band-limited waveform, chorus, and vibrato."""
 
     __slots__ = (
-        "_phase", "_phase_inc", "_sample_rate", "_frequency",
-        "_vibrato_depth", "_vibrato_rate", "_vibrato_phase",
+        "_phase",
+        "_phase_inc",
+        "_sample_rate",
+        "_frequency",
+        "_vibrato_depth",
+        "_vibrato_rate",
+        "_vibrato_phase",
         "_table",
     )
 
@@ -139,7 +146,7 @@ class Oscillator:
         self._phase = np.random.uniform(0, TABLE_SIZE)  # Random start for chorus
         self._phase_inc = frequency * TABLE_SIZE / sample_rate
         self._vibrato_depth = vibrato_depth  # In Hz
-        self._vibrato_rate = vibrato_rate     # LFO rate in Hz
+        self._vibrato_rate = vibrato_rate  # LFO rate in Hz
         self._vibrato_phase = np.random.uniform(0, 2 * np.pi)
         # Band-limited table selection based on frequency
         self._table = _select_table(waveform, frequency)
@@ -155,12 +162,15 @@ class Oscillator:
         if self._vibrato_depth > 0:
             # LFO modulates frequency
             lfo = np.sin(
-                2 * np.pi * self._vibrato_rate * t / self._sample_rate + self._vibrato_phase
+                2 * np.pi * self._vibrato_rate * t / self._sample_rate
+                + self._vibrato_phase
             )
             freq_mod = self._frequency + self._vibrato_depth * lfo
             phase_incs = freq_mod * TABLE_SIZE / self._sample_rate
             phases = self._phase + np.cumsum(phase_incs)
-            self._vibrato_phase += 2 * np.pi * self._vibrato_rate * num_frames / self._sample_rate
+            self._vibrato_phase += (
+                2 * np.pi * self._vibrato_rate * num_frames / self._sample_rate
+            )
         else:
             phases = self._phase + self._phase_inc * t
 
@@ -176,8 +186,9 @@ class Oscillator:
         samples = table[idx] * (1.0 - frac) + table[idx_next] * frac
 
         # Advance phase state
-        self._phase = phases[-1] + (self._phase_inc if self._vibrato_depth == 0
-                                     else phase_incs[-1])
+        self._phase = phases[-1] + (
+            self._phase_inc if self._vibrato_depth == 0 else phase_incs[-1]
+        )
         self._phase = self._phase % TABLE_SIZE
 
         return samples

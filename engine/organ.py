@@ -23,6 +23,11 @@ _smooth = np.convolve(_raw_chiff, np.ones(8) / 8, mode='same')
 CHIFF_TABLE = (_raw_chiff - _smooth * 0.7).astype(np.float32)
 CHIFF_TABLE /= np.max(np.abs(CHIFF_TABLE))
 
+# Pre-compute a wind noise table (reused across all voices)
+_WIND_NOISE_SIZE = 44100 * 2  # 2 seconds
+_WIND_NOISE_TABLE = _rng.standard_normal(_WIND_NOISE_SIZE).astype(np.float32)
+_WIND_NOISE_TABLE *= 1.0 / np.max(np.abs(_WIND_NOISE_TABLE))
+
 
 class OrganVoice:
     """A single sounding note with per-stop voicing characteristics."""
@@ -33,6 +38,7 @@ class OrganVoice:
         "_noise_level", "_chiff_amount", "_stop_waveform",
         "_tracker_click_left", "_tracker_click_phase",
         "_wind_flutter_phase", "_wind_flutter_rate",
+        "_wind_noise_pos",
     )
 
     # Tracker action click — the mechanical sound of the key valve opening
@@ -132,6 +138,9 @@ class OrganVoice:
         self._wind_flutter_phase = pipe_rand.uniform(0, 2 * np.pi)
         self._wind_flutter_rate = pipe_rand.uniform(0.3, 0.8)  # Very slow
 
+        # Wind noise: position into pre-computed table (randomized start)
+        self._wind_noise_pos = pipe_rand.integers(0, _WIND_NOISE_SIZE)
+
         self._envelope.note_on()
 
     def note_off(self) -> None:
@@ -219,13 +228,20 @@ class OrganVoice:
 
         # Subtle wind noise (continuous, very low amplitude with variation)
         if self._noise_level > 0:
-            noise = np.random.randn(num_frames).astype(np.float32)
-            # Shape noise to be slightly frequency-dependent (higher notes = brighter noise)
-            if self._fundamental > 800:
-                output += noise * self._noise_level * 1.3
+            # Use pre-computed noise table instead of per-call np.random.randn
+            end_npos = self._wind_noise_pos + num_frames
+            if end_npos <= _WIND_NOISE_SIZE:
+                noise = _WIND_NOISE_TABLE[self._wind_noise_pos:end_npos]
             else:
-                # Low-pass the noise for lower notes
-                noise = np.convolve(noise, np.ones(3) / 3, mode='same').astype(np.float32)
+                # Wrap around
+                part1 = _WIND_NOISE_TABLE[self._wind_noise_pos:]
+                part2 = _WIND_NOISE_TABLE[:num_frames - len(part1)]
+                noise = np.concatenate((part1, part2))
+            self._wind_noise_pos = end_npos % _WIND_NOISE_SIZE
+
+            if self._fundamental > 800:
+                output += noise * (self._noise_level * 1.3)
+            else:
                 output += noise * self._noise_level
 
         # Apply envelope

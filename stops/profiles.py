@@ -25,6 +25,11 @@ class StopDefinition:
     wind_noise: float = 0.004       # Continuous wind noise level
     attack_ms: float = 45.0         # Envelope attack time
     release_ms: float = 800.0       # Envelope release time
+    is_tremulant: bool = False       # True = not a pipe rank, but an effect
+    tremulant_depth: float = 0.0     # Amplitude modulation depth (0–1)
+    tremulant_rate: float = 6.5      # Amplitude modulation rate (Hz)
+    pitch_shift: float = 1.0         # Pitch multiplier (e.g. 2.0 = octave up)
+    is_mutation: bool = False        # True = mutation rank (fixed pitch ratio)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -156,6 +161,81 @@ VOX_CELESTE_DEF = StopDefinition(
     release_ms=900.0,
 )
 
+# ── New stops — each fills a distinct sonic purpose ──────────────────
+
+# TRUMPET 8' — Blazing solo reed. The afterburner.
+# Extremely rich harmonic content with a biting, brassy attack.
+# Use for solo melodies that need to cut through any registration.
+TRUMPET_8_DEF = StopDefinition(
+    harmonics={
+        1: 1.0, 2: 0.95, 3: 0.88, 4: 0.80,
+        5: 0.72, 6: 0.63, 7: 0.55, 8: 0.48,
+        9: 0.40, 10: 0.33, 11: 0.27, 12: 0.22,
+        13: 0.17, 14: 0.13, 15: 0.10, 16: 0.07,
+        17: 0.05, 18: 0.03, 19: 0.02,
+    },
+    waveform="reed",
+    chorus_detune=1.5,
+    vibrato_depth=0.4,
+    vibrato_rate=5.5,
+    chiff_amount=0.005,     # Reeds don't chiff — they bark
+    chiff_ms=5.0,
+    wind_noise=0.002,
+    attack_ms=15.0,          # Very fast, aggressive attack
+    release_ms=350.0,        # Quick cutoff — valve snaps shut
+)
+
+
+
+# SUPER OCTAVE 2' — Brilliant high-pitched principal. Radar sweep.
+# Adds sizzle, presence, and brilliance to any registration.
+# Essential for building a full plenum (Principal + Octave + Super Octave).
+SUPER_OCTAVE_2_DEF = StopDefinition(
+    harmonics={
+        4: 1.0, 8: 0.55, 12: 0.35, 16: 0.18,
+        20: 0.08, 24: 0.04,
+    },
+    waveform="principal",
+    chorus_detune=1.1,
+    vibrato_depth=0.7,
+    chiff_amount=0.007,
+    chiff_ms=8.0,
+    wind_noise=0.002,
+    attack_ms=22.0,
+    release_ms=500.0,
+)
+
+# VOIX HUMAINE 8' — Imitative reed that quivers like a human voice.
+# Delicate, intimate, eerie. Comms channel.
+# Traditionally always used WITH the Tremulant for the wavering effect.
+VOIX_HUMAINE_DEF = StopDefinition(
+    harmonics={
+        1: 1.0, 2: 0.65, 3: 0.42, 4: 0.28,
+        5: 0.18, 6: 0.12, 7: 0.08, 8: 0.05,
+        9: 0.03, 10: 0.02,
+    },
+    waveform="reed",
+    chorus_detune=2.2,        # Strong chorus for human-like wavering
+    vibrato_depth=1.4,        # Deep vibrato — voice-like tremor
+    vibrato_rate=5.8,
+    chiff_amount=0.003,
+    chiff_ms=4.0,
+    wind_noise=0.002,
+    attack_ms=30.0,
+    release_ms=500.0,
+)
+
+# TREMULANT — Not a pipe rank. A mechanical wind regulator effect.
+# Modulates amplitude + pitch of ALL active stops for a pulsating,
+# breathing quality. Thrust vectoring.
+TREMULANT_DEF = StopDefinition(
+    harmonics={},             # No harmonics — it's an effect, not a rank
+    waveform="sine",
+    is_tremulant=True,
+    tremulant_depth=0.12,     # 12% amplitude modulation
+    tremulant_rate=6.5,       # ~6.5 Hz pulsation
+)
+
 # ──────────────────────────────────────────────────────────────────────
 # Registries
 # ──────────────────────────────────────────────────────────────────────
@@ -170,11 +250,18 @@ STOP_DEFS: dict[str, StopDefinition] = {
     "Mixture": MIXTURE_DEF,
     "Bourdon 16'": BOURDON_16_DEF,
     "Vox Celeste": VOX_CELESTE_DEF,
+    "Trumpet 8'": TRUMPET_8_DEF,
+
+    "Super Oct 2'": SUPER_OCTAVE_2_DEF,
+    "Voix Humaine": VOIX_HUMAINE_DEF,
+    "Tremulant": TREMULANT_DEF,
 }
 
 # Legacy harmonic-only registry (for backward compat)
+# Exclude Tremulant since it has no harmonics
 STOP_REGISTRY: dict[str, HarmonicProfile] = {
     name: sdef.harmonics for name, sdef in STOP_DEFS.items()
+    if not sdef.is_tremulant
 }
 
 # Drawbar harmonic numbers (Hammond convention)

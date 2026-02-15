@@ -48,7 +48,7 @@ class AudioEngine:
             channels=2,
             dtype="float32",
             callback=self._callback,
-            latency="low",
+            latency="high",
         )
         self._stream.start()
         print(f"[audio] Stream started: {SAMPLE_RATE}Hz, {BLOCK_SIZE} frames/block, stereo")

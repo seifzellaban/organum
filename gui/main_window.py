@@ -8,7 +8,7 @@ from PyQt6.QtGui import QFont
 
 from engine.mixer import Mixer
 from engine.midi_player import MidiPlayer
-from stops.profiles import STOP_REGISTRY, DRAWBAR_LABELS
+from stops.profiles import STOP_DEFS, DRAWBAR_LABELS
 from gui.stop_panel import StopPanel
 from gui.drawbars import DrawbarPanel
 from gui.keyboard import PianoKeyboard
@@ -31,7 +31,7 @@ class MainWindow(QMainWindow):
         self._midi_player = midi_player
 
         self.setWindowTitle("Organum — Pipe Organ Synthesizer")
-        self.setMinimumWidth(850)
+        self.setMinimumWidth(960)
         self.setStyleSheet("""
             QMainWindow { background-color: #1e1208; }
             QWidget { background-color: #1e1208; }
@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
 
         # ── Stop panel ──────────────────────────────────────────────
         self._stop_panel = StopPanel(
-            list(STOP_REGISTRY.keys()), mixer.active_stop_names
+            list(STOP_DEFS.keys()), mixer.active_stop_names
         )
         self._stop_panel.stop_toggled.connect(self._on_stop_toggle)
         layout.addWidget(self._stop_panel)

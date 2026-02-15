@@ -5,6 +5,8 @@ drains queue and renders voices. ALL processing is fully vectorized
 with numpy — no per-sample Python loops in the audio path.
 """
 
+import math
+
 from dataclasses import dataclass
 from enum import Enum
 from queue import SimpleQueue
@@ -302,6 +304,15 @@ class Mixer:
         self._stereo_reverb = StereoReverb(sample_rate)
         self._room_resonance = RoomResonance(sample_rate)
 
+        # Tremulant state
+        self._tremulant_active = False
+        self._tremulant_phase = 0.0
+        self._tremulant_depth = 0.12
+        self._tremulant_rate = 6.5
+
+        # Mutation voice tracking: maps base note -> list of mutation voice keys
+        self._mutation_keys: dict[int, list[int]] = {}
+
     def _process_events(self) -> None:
         while not self.event_queue.empty():
             try:
@@ -327,15 +338,49 @@ class Mixer:
                         oldest_note = next(iter(self._voices))
                     del self._voices[oldest_note]
 
-                stop_defs = list(self._active_stop_defs.values())
-                self._voices[note] = OrganVoice(
-                    note, self.sample_rate, stop_defs=stop_defs
-                )
+                # Normal (non-mutation) stop defs for the primary voice
+                normal_defs = [
+                    sd for sd in self._active_stop_defs.values()
+                    if not sd.is_mutation
+                ]
+                if normal_defs:
+                    self._voices[note] = OrganVoice(
+                        note, self.sample_rate, stop_defs=normal_defs
+                    )
+
+                # Mutation stops get their own separate voices at shifted pitch
+                for shift_id, (sname, sd) in enumerate(
+                    self._active_stop_defs.items()
+                ):
+                    if sd.is_mutation:
+                        # Compute the MIDI note that corresponds to the shifted pitch
+                        # pitch_shift=3 means 3rd harmonic (12+7 = 19 semitones up)
+                        # pitch_shift=5 means 5th harmonic (12+12+4 = 28 semitones)
+                        semi_shift = round(12 * math.log2(sd.pitch_shift))
+                        mutation_note = note + semi_shift
+
+                        # Only create if the resulting note is reasonable
+                        if 0 <= mutation_note <= 127:
+                            mut_key = -(note * 1000 + shift_id + 1)
+                            if mut_key in self._voices:
+                                self._voices[mut_key].note_off()
+                            self._voices[mut_key] = OrganVoice(
+                                mutation_note, self.sample_rate,
+                                stop_defs=[sd],
+                            )
+                            # Track which mutation keys belong to this note
+                            self._mutation_keys.setdefault(note, []).append(mut_key)
 
             elif event.type == EventType.NOTE_OFF:
                 note = event.data
                 if note in self._voices:
                     self._voices[note].note_off()
+                # Also release any mutation voices for this note
+                if note in self._mutation_keys:
+                    for mk in self._mutation_keys[note]:
+                        if mk in self._voices:
+                            self._voices[mk].note_off()
+                    del self._mutation_keys[note]
 
             elif event.type == EventType.DRAWBAR_CHANGE:
                 idx, value = event.data
@@ -344,6 +389,18 @@ class Mixer:
 
             elif event.type == EventType.STOP_TOGGLE:
                 stop_name = event.data
+                stop_def = STOP_DEFS.get(stop_name)
+                if not stop_def:
+                    continue
+
+                # Tremulant is a special case — it's an effect, not a rank
+                if stop_def.is_tremulant:
+                    self._tremulant_active = not self._tremulant_active
+                    if self._tremulant_active:
+                        self._tremulant_depth = stop_def.tremulant_depth
+                        self._tremulant_rate = stop_def.tremulant_rate
+                    continue
+
                 if stop_name in self._active_stops:
                     del self._active_stops[stop_name]
                     del self._active_stop_defs[stop_name]
@@ -386,22 +443,38 @@ class Mixer:
         # Sub-bass room resonance
         mono = self._room_resonance.process(mono, has_voices)
 
+        # Tremulant: sinusoidal amplitude modulation across all voices
+        if self._tremulant_active and has_voices:
+            t_frames = np.arange(num_frames, dtype=np.float32)
+            trem_lfo = 1.0 - self._tremulant_depth * (
+                0.5 + 0.5 * np.sin(
+                    2 * np.pi * self._tremulant_rate * t_frames / self.sample_rate
+                    + self._tremulant_phase
+                )
+            )
+            self._tremulant_phase += (
+                2 * np.pi * self._tremulant_rate * num_frames / self.sample_rate
+            )
+            self._tremulant_phase %= (2 * np.pi)
+            mono *= trem_lfo
+
         # Stereo cathedral reverb
         left, right = self._stereo_reverb.process(mono)
 
         # Warm saturation (fully vectorized)
-        def _saturate(signal: np.ndarray) -> np.ndarray:
-            scaled = signal * self._master_volume
-            return np.where(
-                np.abs(scaled) < 0.5,
-                scaled,
-                np.sign(scaled) * (1.0 - np.exp(-2.0 * np.abs(scaled))) * 0.7,
-            ).astype(np.float32)
-
-        left = _saturate(left)
-        right = _saturate(right)
+        left = self._saturate(left)
+        right = self._saturate(right)
 
         return np.column_stack((left, right))
+
+    def _saturate(self, signal: np.ndarray) -> np.ndarray:
+        """Warm tube-style saturation."""
+        scaled = signal * self._master_volume
+        return np.where(
+            np.abs(scaled) < 0.5,
+            scaled,
+            np.sign(scaled) * (1.0 - np.exp(-2.0 * np.abs(scaled))) * 0.7,
+        ).astype(np.float32)
 
     # ── Convenience methods for the GUI thread ──────────────────────
 
@@ -419,7 +492,10 @@ class Mixer:
 
     @property
     def active_stop_names(self) -> set[str]:
-        return set(self._active_stops.keys())
+        names = set(self._active_stops.keys())
+        if self._tremulant_active:
+            names.add("Tremulant")
+        return names
 
     @property
     def drawbar_values(self) -> list[float]:
