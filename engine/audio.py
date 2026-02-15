@@ -10,7 +10,7 @@ from engine.mixer import Mixer
 
 
 SAMPLE_RATE = 44100
-BLOCK_SIZE = 1024  # ~23ms latency — provides headroom for reverb processing
+BLOCK_SIZE = 2048  # ~46ms latency — provides headroom for cathedral reverb + voicing
 
 
 class AudioEngine:

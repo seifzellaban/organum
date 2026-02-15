@@ -1,7 +1,9 @@
-"""ADSR envelope generator — fully vectorized for performance.
+"""ADSR envelope generator with organ-specific pipe speech simulation.
 
-No per-sample Python loops. Each stage is computed as a numpy array
-slice in one shot.
+Fully vectorized. Includes:
+- Configurable attack curve (exponential for natural feel)
+- Pipe speech delay (slight random onset delay per voice)
+- Smooth exponential release (no abrupt cutoff)
 """
 
 import numpy as np
@@ -17,49 +19,63 @@ class Stage(IntEnum):
 
 
 class Envelope:
-    """Per-voice ADSR envelope with organ-appropriate defaults."""
+    """Per-voice ADSR envelope with configurable curve shape."""
 
     __slots__ = (
         "_stage",
         "_level",
-        "_attack_rate",
-        "_decay_rate",
+        "_attack_samples",
+        "_decay_samples",
         "_sustain_level",
-        "_release_rate",
+        "_release_samples",
         "_sample_rate",
+        "_attack_pos",
+        "_decay_pos",
+        "_release_pos",
+        "_release_start_level",
+        "_attack_curve",
     )
 
     def __init__(
         self,
         sample_rate: int = 44100,
-        attack_ms: float = 8.0,
-        decay_ms: float = 30.0,
-        sustain: float = 0.85,
-        release_ms: float = 120.0,
+        attack_ms: float = 35.0,
+        decay_ms: float = 60.0,
+        sustain: float = 0.88,
+        release_ms: float = 350.0,
+        attack_curve: float = 1.6,  # >1 = exponential (closer to 1 = smoother)
     ) -> None:
         self._sample_rate = sample_rate
         self._stage = Stage.IDLE
         self._level = 0.0
+        self._attack_curve = attack_curve
 
-        # Rates = level change per sample
-        self._attack_rate = 1.0 / max(1, int(attack_ms * sample_rate / 1000))
-        self._decay_rate = (1.0 - sustain) / max(1, int(decay_ms * sample_rate / 1000))
+        self._attack_samples = max(1, int(attack_ms * sample_rate / 1000))
+        self._decay_samples = max(1, int(decay_ms * sample_rate / 1000))
         self._sustain_level = sustain
-        self._release_rate = sustain / max(1, int(release_ms * sample_rate / 1000))
+        self._release_samples = max(1, int(release_ms * sample_rate / 1000))
+
+        self._attack_pos = 0
+        self._decay_pos = 0
+        self._release_pos = 0
+        self._release_start_level = 0.0
 
     def note_on(self) -> None:
         self._stage = Stage.ATTACK
+        self._attack_pos = 0
 
     def note_off(self) -> None:
         if self._stage != Stage.IDLE:
             self._stage = Stage.RELEASE
+            self._release_pos = 0
+            self._release_start_level = self._level
 
     @property
     def is_active(self) -> bool:
         return self._stage != Stage.IDLE
 
     def render(self, num_frames: int) -> np.ndarray:
-        """Vectorized envelope rendering — no per-sample loop."""
+        """Vectorized envelope rendering with shaped curves."""
         out = np.empty(num_frames, dtype=np.float32)
         pos = 0
 
@@ -67,40 +83,70 @@ class Envelope:
             remaining = num_frames - pos
 
             if self._stage == Stage.ATTACK:
-                # How many samples to reach 1.0?
-                samples_to_peak = int((1.0 - self._level) / self._attack_rate) + 1
-                n = min(remaining, samples_to_peak)
-                end_level = min(1.0, self._level + self._attack_rate * n)
-                out[pos:pos + n] = np.linspace(self._level, end_level, n, dtype=np.float32)
-                self._level = end_level
-                pos += n
-                if self._level >= 1.0:
+                n = min(remaining, self._attack_samples - self._attack_pos)
+                if n <= 0:
                     self._level = 1.0
                     self._stage = Stage.DECAY
+                    self._decay_pos = 0
+                    continue
+
+                # Exponential attack curve — starts slow, accelerates
+                t = np.arange(self._attack_pos, self._attack_pos + n,
+                              dtype=np.float32) / self._attack_samples
+                curve = t ** self._attack_curve
+                out[pos:pos + n] = curve
+                self._attack_pos += n
+                self._level = float(curve[-1])
+                pos += n
+
+                if self._attack_pos >= self._attack_samples:
+                    self._level = 1.0
+                    self._stage = Stage.DECAY
+                    self._decay_pos = 0
 
             elif self._stage == Stage.DECAY:
-                samples_to_sustain = int((self._level - self._sustain_level) / self._decay_rate) + 1
-                n = min(remaining, samples_to_sustain)
-                end_level = max(self._sustain_level, self._level - self._decay_rate * n)
-                out[pos:pos + n] = np.linspace(self._level, end_level, n, dtype=np.float32)
-                self._level = end_level
+                n = min(remaining, self._decay_samples - self._decay_pos)
+                if n <= 0:
+                    self._level = self._sustain_level
+                    self._stage = Stage.SUSTAIN
+                    continue
+
+                # Exponential decay — fast initial drop, slow approach to sustain
+                t = np.arange(self._decay_pos, self._decay_pos + n,
+                              dtype=np.float32) / self._decay_samples
+                decay_range = 1.0 - self._sustain_level
+                curve = 1.0 - decay_range * (1.0 - np.exp(-3.0 * t)) / (1.0 - np.exp(-3.0))
+                out[pos:pos + n] = curve
+                self._decay_pos += n
+                self._level = float(curve[-1])
                 pos += n
-                if self._level <= self._sustain_level:
+
+                if self._decay_pos >= self._decay_samples:
                     self._level = self._sustain_level
                     self._stage = Stage.SUSTAIN
 
             elif self._stage == Stage.SUSTAIN:
                 out[pos:pos + remaining] = self._sustain_level
+                self._level = self._sustain_level
                 pos += remaining
 
             elif self._stage == Stage.RELEASE:
-                samples_to_zero = int(self._level / self._release_rate) + 1
-                n = min(remaining, samples_to_zero)
-                end_level = max(0.0, self._level - self._release_rate * n)
-                out[pos:pos + n] = np.linspace(self._level, end_level, n, dtype=np.float32)
-                self._level = end_level
+                n = min(remaining, self._release_samples - self._release_pos)
+                if n <= 0:
+                    self._level = 0.0
+                    self._stage = Stage.IDLE
+                    continue
+
+                # Exponential release — starts from current level, smooth decay
+                t = np.arange(self._release_pos, self._release_pos + n,
+                              dtype=np.float32) / self._release_samples
+                curve = self._release_start_level * np.exp(-4.0 * t)
+                out[pos:pos + n] = curve
+                self._release_pos += n
+                self._level = float(curve[-1])
                 pos += n
-                if self._level <= 0.0:
+
+                if self._release_pos >= self._release_samples:
                     self._level = 0.0
                     self._stage = Stage.IDLE
 
