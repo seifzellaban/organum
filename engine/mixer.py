@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from engine.organ import OrganVoice
-from stops.profiles import STOP_REGISTRY, STOP_DEFS, HarmonicProfile, StopDefinition
+from stops.profiles import STOP_DEFS, STOP_REGISTRY, HarmonicProfile, StopDefinition
 
 
 class EventType(Enum):
@@ -34,8 +34,9 @@ class CombFilter:
 
     __slots__ = ("_buffer", "_size", "_pos", "_feedback_damped")
 
-    def __init__(self, delay_samples: int, feedback: float = 0.7,
-                 damping: float = 0.3) -> None:
+    def __init__(
+        self, delay_samples: int, feedback: float = 0.7, damping: float = 0.3
+    ) -> None:
         self._buffer = np.zeros(delay_samples, dtype=np.float32)
         self._size = delay_samples
         self._pos = 0
@@ -240,8 +241,12 @@ class RoomResonance:
             2 * np.pi * self._freq2 * t / self._sample_rate + self._phase2
         ).astype(np.float32)
 
-        self._phase1 = (self._phase1 + 2 * np.pi * self._freq1 * n / self._sample_rate) % (2 * np.pi)
-        self._phase2 = (self._phase2 + 2 * np.pi * self._freq2 * n / self._sample_rate) % (2 * np.pi)
+        self._phase1 = (
+            self._phase1 + 2 * np.pi * self._freq1 * n / self._sample_rate
+        ) % (2 * np.pi)
+        self._phase2 = (
+            self._phase2 + 2 * np.pi * self._freq2 * n / self._sample_rate
+        ) % (2 * np.pi)
 
         return signal + (res1 * 0.6 + res2 * 0.4) * self._level_smooth
 
@@ -260,16 +265,27 @@ class Mixer:
         self._voices: dict[int, OrganVoice] = {}
 
         # FULL CATHEDRAL REGISTRATION
+        # self._drawbar_values: list[float] = [
+        #     1.0,  # 16'
+        #     1.0,  # 8'
+        #     0.7,  # 5⅓'
+        #     0.85, # 4'
+        #     0.5,  # 2⅔'
+        #     0.65, # 2'
+        #     0.35, # 1⅗'
+        #     0.3,  # 1⅓'
+        #     0.25, # 1'
+        # ]
         self._drawbar_values: list[float] = [
-            1.0,  # 16'
-            1.0,  # 8'
-            0.7,  # 5⅓'
-            0.85, # 4'
-            0.5,  # 2⅔'
-            0.65, # 2'
-            0.35, # 1⅗'
-            0.3,  # 1⅓'
-            0.25, # 1'
+            1.0,
+            1.0,
+            0.75,
+            1.0,
+            0.625,
+            0.875,
+            0.5,
+            0.375,
+            0.25,
         ]
 
         self._active_stops: dict[str, HarmonicProfile] = {
@@ -349,7 +365,9 @@ class Mixer:
             dead_notes: list[int] = []
             for note, voice in self._voices.items():
                 if voice.is_active:
-                    mono += voice.render(num_frames, self._drawbar_values, stop_profiles)
+                    mono += voice.render(
+                        num_frames, self._drawbar_values, stop_profiles
+                    )
                     has_voices = True
                     active_count += 1
                 else:
@@ -360,7 +378,7 @@ class Mixer:
 
         # Voice normalization
         if active_count > 1:
-            mono *= (1.0 / np.sqrt(active_count))
+            mono *= 1.0 / np.sqrt(active_count)
 
         # DC removal (vectorized — just subtract mean)
         mono -= np.mean(mono)
@@ -377,7 +395,7 @@ class Mixer:
             return np.where(
                 np.abs(scaled) < 0.5,
                 scaled,
-                np.sign(scaled) * (1.0 - np.exp(-2.0 * np.abs(scaled))) * 0.7
+                np.sign(scaled) * (1.0 - np.exp(-2.0 * np.abs(scaled))) * 0.7,
             ).astype(np.float32)
 
         left = _saturate(left)
