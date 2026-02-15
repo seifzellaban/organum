@@ -4,42 +4,41 @@ Shows 2 octaves of piano keys. Arrow keys shift the octave range
 across the full MIDI spectrum (C1–C7).
 """
 
+from PyQt6.QtCore import QRect, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, pyqtSignal, QRect
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QMouseEvent, QKeyEvent
-
 
 # QWERTY → semitone offset mapping (relative to current octave base)
 # Lower row: C – B (one octave)
 # Upper row: C – B (next octave)
 _LOWER_ROW = [
-    (Qt.Key.Key_Z, 0),   # C
-    (Qt.Key.Key_S, 1),   # C#
-    (Qt.Key.Key_X, 2),   # D
-    (Qt.Key.Key_D, 3),   # D#
-    (Qt.Key.Key_C, 4),   # E
-    (Qt.Key.Key_V, 5),   # F
-    (Qt.Key.Key_G, 6),   # F#
-    (Qt.Key.Key_B, 7),   # G
-    (Qt.Key.Key_H, 8),   # G#
-    (Qt.Key.Key_N, 9),   # A
+    (Qt.Key.Key_Z, 0),  # C
+    (Qt.Key.Key_S, 1),  # C#
+    (Qt.Key.Key_X, 2),  # D
+    (Qt.Key.Key_D, 3),  # D#
+    (Qt.Key.Key_C, 4),  # E
+    (Qt.Key.Key_V, 5),  # F
+    (Qt.Key.Key_G, 6),  # F#
+    (Qt.Key.Key_B, 7),  # G
+    (Qt.Key.Key_H, 8),  # G#
+    (Qt.Key.Key_N, 9),  # A
     (Qt.Key.Key_J, 10),  # A#
     (Qt.Key.Key_M, 11),  # B
 ]
 
 _UPPER_ROW = [
-    (Qt.Key.Key_Q, 12),  # C+1
-    (Qt.Key.Key_2, 13),  # C#+1
-    (Qt.Key.Key_W, 14),  # D+1
-    (Qt.Key.Key_3, 15),  # D#+1
-    (Qt.Key.Key_E, 16),  # E+1
-    (Qt.Key.Key_R, 17),  # F+1
-    (Qt.Key.Key_5, 18),  # F#+1
-    (Qt.Key.Key_T, 19),  # G+1
-    (Qt.Key.Key_6, 20),  # G#+1
-    (Qt.Key.Key_Y, 21),  # A+1
-    (Qt.Key.Key_7, 22),  # A#+1
-    (Qt.Key.Key_U, 23),  # B+1
+    (Qt.Key.Key_Y, 12),  # C+1
+    (Qt.Key.Key_7, 13),  # C#+1
+    (Qt.Key.Key_U, 14),  # D+1
+    (Qt.Key.Key_8, 15),  # D#+1
+    (Qt.Key.Key_I, 16),  # E+1
+    (Qt.Key.Key_O, 17),  # F+1
+    (Qt.Key.Key_0, 18),  # F#+1
+    (Qt.Key.Key_P, 19),  # G+1
+    (Qt.Key.Key_Minus, 20),  # G#+1
+    (Qt.Key.Key_BracketLeft, 21),  # A+1
+    (Qt.Key.Key_Equal, 22),  # A#+1
+    (Qt.Key.Key_BracketRight, 23),  # B+1
 ]
 
 # Key offset map: Qt key → semitone offset from octave base
@@ -49,14 +48,30 @@ for key, offset in _LOWER_ROW + _UPPER_ROW:
 
 # Reverse: offset → key label
 _QT_KEY_NAMES = {
-    Qt.Key.Key_Z: "Z", Qt.Key.Key_S: "S", Qt.Key.Key_X: "X",
-    Qt.Key.Key_D: "D", Qt.Key.Key_C: "C", Qt.Key.Key_V: "V",
-    Qt.Key.Key_G: "G", Qt.Key.Key_B: "B", Qt.Key.Key_H: "H",
-    Qt.Key.Key_N: "N", Qt.Key.Key_J: "J", Qt.Key.Key_M: "M",
-    Qt.Key.Key_Q: "Q", Qt.Key.Key_2: "2", Qt.Key.Key_W: "W",
-    Qt.Key.Key_3: "3", Qt.Key.Key_E: "E", Qt.Key.Key_R: "R",
-    Qt.Key.Key_5: "5", Qt.Key.Key_T: "T", Qt.Key.Key_6: "6",
-    Qt.Key.Key_Y: "Y", Qt.Key.Key_7: "7", Qt.Key.Key_U: "U",
+    Qt.Key.Key_Z: "Z",
+    Qt.Key.Key_S: "S",
+    Qt.Key.Key_X: "X",
+    Qt.Key.Key_D: "D",
+    Qt.Key.Key_C: "C",
+    Qt.Key.Key_V: "V",
+    Qt.Key.Key_G: "G",
+    Qt.Key.Key_B: "B",
+    Qt.Key.Key_H: "H",
+    Qt.Key.Key_N: "N",
+    Qt.Key.Key_J: "J",
+    Qt.Key.Key_M: "M",
+    Qt.Key.Key_Y: "Y",
+    Qt.Key.Key_7: "7",
+    Qt.Key.Key_U: "U",
+    Qt.Key.Key_8: "8",
+    Qt.Key.Key_I: "I",
+    Qt.Key.Key_O: "O",
+    Qt.Key.Key_0: "0",
+    Qt.Key.Key_P: "P",
+    Qt.Key.Key_Minus: "-",
+    Qt.Key.Key_BracketLeft: "[",
+    Qt.Key.Key_Equal: "=",
+    Qt.Key.Key_BracketRight: "]",
 }
 
 OFFSET_TO_KEY_LABEL: dict[int, str] = {}
@@ -84,8 +99,8 @@ class PianoKeyboard(QWidget):
     BLACK_KEY_H = 95
 
     # Octave range
-    MIN_BASE_NOTE = 24   # C1
-    MAX_BASE_NOTE = 84   # C6
+    MIN_BASE_NOTE = 24  # C1
+    MAX_BASE_NOTE = 84  # C6
 
     def __init__(self, base_note: int = 48) -> None:
         super().__init__()

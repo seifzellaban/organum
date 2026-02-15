@@ -4,14 +4,15 @@ Thread safety: GUI thread sends events via SimpleQueue. Audio callback
 drains queue and renders voices. Simple Schroeder reverb via comb filters.
 """
 
-import numpy as np
-from queue import SimpleQueue
 from dataclasses import dataclass
 from enum import Enum
+from queue import SimpleQueue
 from typing import Any
 
+import numpy as np
+
 from engine.organ import OrganVoice
-from stops.profiles import HarmonicProfile, STOP_REGISTRY
+from stops.profiles import STOP_REGISTRY, HarmonicProfile
 
 
 class EventType(Enum):
@@ -41,28 +42,30 @@ class CombFilter:
     def process(self, input_signal: np.ndarray) -> np.ndarray:
         n = len(input_signal)
         output = np.empty(n, dtype=np.float32)
-        
+
         # Process in chunks to avoid modulo overhead
         remaining = n
         in_pos = 0
-        
+
         while remaining > 0:
             # How many samples until we wrap?
             chunk = min(remaining, self._size - self._pos)
-            
+
             # Read delayed samples
-            output[in_pos:in_pos + chunk] = self._buffer[self._pos:self._pos + chunk]
-            
+            output[in_pos : in_pos + chunk] = self._buffer[
+                self._pos : self._pos + chunk
+            ]
+
             # Write new samples with feedback
-            self._buffer[self._pos:self._pos + chunk] = (
-                input_signal[in_pos:in_pos + chunk] + 
-                output[in_pos:in_pos + chunk] * self._feedback
+            self._buffer[self._pos : self._pos + chunk] = (
+                input_signal[in_pos : in_pos + chunk]
+                + output[in_pos : in_pos + chunk] * self._feedback
             )
-            
+
             self._pos = (self._pos + chunk) % self._size
             in_pos += chunk
             remaining -= chunk
-            
+
         return output
 
 
@@ -80,35 +83,35 @@ class AllpassFilter:
     def process(self, input_signal: np.ndarray) -> np.ndarray:
         n = len(input_signal)
         output = np.empty(n, dtype=np.float32)
-        
+
         remaining = n
         in_pos = 0
-        
+
         while remaining > 0:
             chunk = min(remaining, self._size - self._pos)
-            
-            delayed = self._buffer[self._pos:self._pos + chunk]
-            v = input_signal[in_pos:in_pos + chunk] - self._gain * delayed
-            output[in_pos:in_pos + chunk] = delayed + self._gain * v
-            self._buffer[self._pos:self._pos + chunk] = v
-            
+
+            delayed = self._buffer[self._pos : self._pos + chunk]
+            v = input_signal[in_pos : in_pos + chunk] - self._gain * delayed
+            output[in_pos : in_pos + chunk] = delayed + self._gain * v
+            self._buffer[self._pos : self._pos + chunk] = v
+
             self._pos = (self._pos + chunk) % self._size
             in_pos += chunk
             remaining -= chunk
-            
+
         return output
 
 
 class SimpleReverb:
     """Schroeder reverb: 4 parallel comb filters + 2 series allpass filters."""
 
-    def __init__(self, sample_rate: int = 44100, room_size: float = 0.6, wet: float = 0.2) -> None:
+    def __init__(
+        self, sample_rate: int = 44100, room_size: float = 0.6, wet: float = 0.2
+    ) -> None:
         # Prime number delays for reduced metallic artifacts
         base_delays = [1557, 1617, 1491, 1422]
         scale = room_size
-        self._combs = [
-            CombFilter(int(d * scale), feedback=0.75) for d in base_delays
-        ]
+        self._combs = [CombFilter(int(d * scale), feedback=0.75) for d in base_delays]
         self._allpasses = [
             AllpassFilter(225, gain=0.5),
             AllpassFilter(556, gain=0.5),
@@ -140,16 +143,29 @@ class Mixer:
         self._voices: dict[int, OrganVoice] = {}
 
         # 9 drawbar values (0.0–1.0), default: classic organ registration
+        # self._drawbar_values: list[float] = [
+        #     0.0,  # 16'
+        #     1.0,  # 8'
+        #     0.0,  # 5⅓'
+        #     0.75,  # 4'
+        #     0.0,  # 2⅔'
+        #     0.5,  # 2'
+        #     0.0,  # 1⅗'
+        #     0.0,  # 1⅓'
+        #     0.0,  # 1'
+        # ]
+
+        # GRAND CATHEDRAL REGISTRATION - Full, rich, majestic
         self._drawbar_values: list[float] = [
-            0.0,   # 16'
-            1.0,   # 8'
-            0.0,   # 5⅓'
-            0.75,  # 4'
-            0.0,   # 2⅔'
-            0.5,   # 2'
-            0.0,   # 1⅗'
-            0.0,   # 1⅓'
-            0.0,   # 1'
+            0.8,  # 16' - Sub-octave foundation (THIS IS ESSENTIAL)
+            1.0,  # 8'  - Fundamental (keep it)
+            0.6,  # 5⅓' - Quint adds warmth and complexity
+            0.8,  # 4'  - Octave reinforcement (bump this UP)
+            0.4,  # 2⅔' - Second quint for richness
+            0.6,  # 2'  - Upper octave for brilliance
+            0.3,  # 1⅗' - Tierce adds COLOR
+            0.25,  # 1⅓' - Larigot for shimmer
+            0.2,  # 1'  - Top octave sparkle
         ]
 
         self._active_stops: dict[str, HarmonicProfile] = {
