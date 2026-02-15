@@ -1,10 +1,8 @@
 """Polyphonic mixer with stereo cathedral reverb and warm saturation.
 
 Thread safety: GUI thread sends events via SimpleQueue. Audio callback
-drains queue and renders voices. Stereo Schroeder reverb with two
-independent reverb units (different delay sets for L/R) creates
-immense cathedral width. Sub-bass room resonance adds the feeling
-of being inside a massive stone building.
+drains queue and renders voices. ALL processing is fully vectorized
+with numpy — no per-sample Python loops in the audio path.
 """
 
 from dataclasses import dataclass
@@ -32,18 +30,19 @@ class AudioEvent:
 
 
 class CombFilter:
-    """Vectorized comb filter with low-pass damping for natural reverb decay."""
+    """Fully vectorized comb filter with constant damping (no per-sample loop)."""
 
-    __slots__ = ("_buffer", "_size", "_pos", "_feedback", "_damp", "_last")
+    __slots__ = ("_buffer", "_size", "_pos", "_feedback_damped")
 
     def __init__(self, delay_samples: int, feedback: float = 0.7,
                  damping: float = 0.3) -> None:
         self._buffer = np.zeros(delay_samples, dtype=np.float32)
         self._size = delay_samples
         self._pos = 0
-        self._feedback = feedback
-        self._damp = damping
-        self._last = 0.0  # For one-pole low-pass
+        # Pre-combine feedback and damping into a single multiplier
+        # This approximates the one-pole low-pass: constant attenuation
+        # rather than per-sample IIR, but avoids the costly Python loop
+        self._feedback_damped = feedback * (1.0 - damping * 0.5)
 
     def process(self, input_signal: np.ndarray) -> np.ndarray:
         n = len(input_signal)
@@ -54,25 +53,16 @@ class CombFilter:
 
         while remaining > 0:
             chunk = min(remaining, self._size - self._pos)
+            buf_slice = slice(self._pos, self._pos + chunk)
+            out_slice = slice(in_pos, in_pos + chunk)
 
             # Read delayed samples
-            delayed = self._buffer[self._pos : self._pos + chunk].copy()
-            output[in_pos : in_pos + chunk] = delayed
+            output[out_slice] = self._buffer[buf_slice]
 
-            # Apply one-pole low-pass filter to feedback (damping)
-            # This simulates air absorption — high frequencies decay faster
-            filtered = np.empty(chunk, dtype=np.float32)
-            last = self._last
-            damp = self._damp
-            for j in range(chunk):
-                last = delayed[j] * (1.0 - damp) + last * damp
-                filtered[j] = last
-            self._last = last
-
-            # Write new samples with filtered feedback
-            self._buffer[self._pos : self._pos + chunk] = (
-                input_signal[in_pos : in_pos + chunk]
-                + filtered * self._feedback
+            # Write new samples with damped feedback (fully vectorized)
+            self._buffer[buf_slice] = (
+                input_signal[out_slice]
+                + self._buffer[buf_slice] * self._feedback_damped
             )
 
             self._pos = (self._pos + chunk) % self._size
@@ -83,7 +73,7 @@ class CombFilter:
 
 
 class AllpassFilter:
-    """Vectorized allpass filter for reverb diffusion."""
+    """Fully vectorized allpass filter for reverb diffusion."""
 
     __slots__ = ("_buffer", "_size", "_pos", "_gain")
 
@@ -102,11 +92,13 @@ class AllpassFilter:
 
         while remaining > 0:
             chunk = min(remaining, self._size - self._pos)
+            buf_slice = slice(self._pos, self._pos + chunk)
+            out_slice = slice(in_pos, in_pos + chunk)
 
-            delayed = self._buffer[self._pos : self._pos + chunk]
-            v = input_signal[in_pos : in_pos + chunk] - self._gain * delayed
-            output[in_pos : in_pos + chunk] = delayed + self._gain * v
-            self._buffer[self._pos : self._pos + chunk] = v
+            delayed = self._buffer[buf_slice].copy()
+            v = input_signal[out_slice] - self._gain * delayed
+            output[out_slice] = delayed + self._gain * v
+            self._buffer[buf_slice] = v
 
             self._pos = (self._pos + chunk) % self._size
             in_pos += chunk
@@ -116,10 +108,8 @@ class AllpassFilter:
 
 
 class CathedralReverb:
-    """Enhanced Schroeder reverb with extra diffusion for cathedral ambiance.
-
-    6 parallel comb filters (with damping) + 4 series allpass filters.
-    Longer delays and more diffusion than a standard room reverb.
+    """Schroeder reverb: parallel comb filters + series allpass filters.
+    Fully vectorized — no per-sample Python loops.
     """
 
     def __init__(
@@ -141,24 +131,22 @@ class CathedralReverb:
             for d in base_delays
         ]
 
-        # More allpass stages for better diffusion (less metallic)
         self._allpasses = [
             AllpassFilter(241, gain=0.6),
             AllpassFilter(557, gain=0.55),
             AllpassFilter(373, gain=0.5),
-            AllpassFilter(167, gain=0.45),
         ]
 
         self._wet = wet
         self._dry = 1.0 - wet
+        self._inv_comb_count = 1.0 / len(self._combs)
 
-        # Pre-delay: simulates distance from sound source to first reflection
+        # Pre-delay buffer
         self._predelay_samples = max(1, int(predelay_ms * sample_rate / 1000))
         self._predelay_buf = np.zeros(self._predelay_samples, dtype=np.float32)
         self._predelay_pos = 0
 
     def _predelay(self, signal: np.ndarray) -> np.ndarray:
-        """Simple delay line for reverb pre-delay."""
         n = len(signal)
         output = np.empty(n, dtype=np.float32)
         remaining = n
@@ -166,12 +154,12 @@ class CathedralReverb:
 
         while remaining > 0:
             chunk = min(remaining, self._predelay_samples - self._predelay_pos)
-            output[in_pos:in_pos + chunk] = self._predelay_buf[
-                self._predelay_pos:self._predelay_pos + chunk
-            ]
-            self._predelay_buf[
-                self._predelay_pos:self._predelay_pos + chunk
-            ] = signal[in_pos:in_pos + chunk]
+            buf_slice = slice(self._predelay_pos, self._predelay_pos + chunk)
+            out_slice = slice(in_pos, in_pos + chunk)
+
+            output[out_slice] = self._predelay_buf[buf_slice]
+            self._predelay_buf[buf_slice] = signal[out_slice]
+
             self._predelay_pos = (self._predelay_pos + chunk) % self._predelay_samples
             in_pos += chunk
             remaining -= chunk
@@ -179,14 +167,13 @@ class CathedralReverb:
         return output
 
     def process(self, signal: np.ndarray) -> np.ndarray:
-        # Pre-delay
         delayed = self._predelay(signal)
 
         # Sum parallel comb outputs
         reverb = np.zeros_like(signal)
         for comb in self._combs:
             reverb += comb.process(delayed)
-        reverb /= len(self._combs)
+        reverb *= self._inv_comb_count
 
         # Series allpass for diffusion
         for ap in self._allpasses:
@@ -196,13 +183,9 @@ class CathedralReverb:
 
 
 class StereoReverb:
-    """Stereo cathedral reverb — two independent reverb units with different
-    delay characteristics for left and right channels. Creates massive
-    spatial width like being inside a real cathedral.
-    """
+    """Stereo cathedral reverb — two independent reverb units."""
 
     def __init__(self, sample_rate: int = 44100) -> None:
-        # Left channel: slightly shorter delays, less pre-delay
         self._left = CathedralReverb(
             sample_rate,
             room_size=0.90,
@@ -212,8 +195,6 @@ class StereoReverb:
             damping=0.32,
             predelay_ms=16.0,
         )
-        # Right channel: slightly longer delays, more pre-delay
-        # Different prime-number delays create decorrelated reflections
         self._right = CathedralReverb(
             sample_rate,
             room_size=0.93,
@@ -225,52 +206,33 @@ class StereoReverb:
         )
 
     def process(self, mono_signal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Process mono input → stereo output (left, right)."""
         left = self._left.process(mono_signal)
         right = self._right.process(mono_signal)
         return left, right
 
 
 class RoomResonance:
-    """Sub-bass cathedral room resonance — the ambient hum of a massive space.
-
-    Real cathedrals have natural resonant frequencies determined by their
-    dimensions. This generates a very subtle, slowly evolving low-frequency
-    drone that reacts to the input signal level.
-    """
+    """Sub-bass cathedral room resonance."""
 
     def __init__(self, sample_rate: int = 44100) -> None:
         self._sample_rate = sample_rate
         self._phase1 = 0.0
         self._phase2 = 0.0
-        # Room resonance frequencies (very low — you feel these more than hear)
-        self._freq1 = 32.0   # ~C1 — typical large cathedral resonance
-        self._freq2 = 48.0   # ~G1 — fifth above
-        self._level = 0.0
+        self._freq1 = 32.0
+        self._freq2 = 48.0
         self._level_smooth = 0.0
 
     def process(self, signal: np.ndarray, has_active_voices: bool) -> np.ndarray:
-        """Add subtle room resonance proportional to signal energy."""
         n = len(signal)
 
-        # Track signal level with slow follower
-        if has_active_voices:
-            target = 0.012  # Subtle but present
-        else:
-            target = 0.0
-
-        # Very slow attack/release for the resonance envelope
-        if target > self._level_smooth:
-            self._level_smooth += (target - self._level_smooth) * 0.0005
-        else:
-            self._level_smooth += (target - self._level_smooth) * 0.0001
+        target = 0.012 if has_active_voices else 0.0
+        rate = 0.0005 if target > self._level_smooth else 0.0001
+        self._level_smooth += (target - self._level_smooth) * rate
 
         if self._level_smooth < 0.0001:
             return signal
 
         t = np.arange(n, dtype=np.float64)
-
-        # Two low-frequency tones with slow beating
         res1 = np.sin(
             2 * np.pi * self._freq1 * t / self._sample_rate + self._phase1
         ).astype(np.float32)
@@ -278,13 +240,14 @@ class RoomResonance:
             2 * np.pi * self._freq2 * t / self._sample_rate + self._phase2
         ).astype(np.float32)
 
-        self._phase1 += 2 * np.pi * self._freq1 * n / self._sample_rate
-        self._phase2 += 2 * np.pi * self._freq2 * n / self._sample_rate
-        self._phase1 %= (2 * np.pi)
-        self._phase2 %= (2 * np.pi)
+        self._phase1 = (self._phase1 + 2 * np.pi * self._freq1 * n / self._sample_rate) % (2 * np.pi)
+        self._phase2 = (self._phase2 + 2 * np.pi * self._freq2 * n / self._sample_rate) % (2 * np.pi)
 
-        resonance = (res1 * 0.6 + res2 * 0.4) * self._level_smooth
-        return signal + resonance
+        return signal + (res1 * 0.6 + res2 * 0.4) * self._level_smooth
+
+
+# Maximum simultaneous voices (prevents CPU overload with long releases)
+MAX_VOICES = 24
 
 
 class Mixer:
@@ -296,26 +259,24 @@ class Mixer:
 
         self._voices: dict[int, OrganVoice] = {}
 
-        # FULL CATHEDRAL REGISTRATION — maximum grandeur
+        # FULL CATHEDRAL REGISTRATION
         self._drawbar_values: list[float] = [
-            1.0,  # 16' - Sub-octave foundation (FULL for grandeur)
-            1.0,  # 8'  - Fundamental
-            0.7,  # 5⅓' - Quint warmth and complexity
-            0.85, # 4'  - Octave reinforcement
-            0.5,  # 2⅔' - Second quint richness
-            0.65, # 2'  - Upper octave brilliance
-            0.35, # 1⅗' - Tierce color
-            0.3,  # 1⅓' - Larigot shimmer
-            0.25, # 1'  - Top octave sparkle
+            1.0,  # 16'
+            1.0,  # 8'
+            0.7,  # 5⅓'
+            0.85, # 4'
+            0.5,  # 2⅔'
+            0.65, # 2'
+            0.35, # 1⅗'
+            0.3,  # 1⅓'
+            0.25, # 1'
         ]
 
-        # Start with Principal + Bourdon for a grand foundation
         self._active_stops: dict[str, HarmonicProfile] = {
             "Principal 8'": STOP_REGISTRY["Principal 8'"],
             "Bourdon 16'": STOP_REGISTRY["Bourdon 16'"],
         }
 
-        # Track full stop definitions for voicing
         self._active_stop_defs: dict[str, StopDefinition] = {
             "Principal 8'": STOP_DEFS["Principal 8'"],
             "Bourdon 16'": STOP_DEFS["Bourdon 16'"],
@@ -324,25 +285,6 @@ class Mixer:
         self._master_volume = 0.32
         self._stereo_reverb = StereoReverb(sample_rate)
         self._room_resonance = RoomResonance(sample_rate)
-
-        # DC blocking filter state (stereo)
-        self._dc_x_prev_l = 0.0
-        self._dc_y_prev_l = 0.0
-        self._dc_x_prev_r = 0.0
-        self._dc_y_prev_r = 0.0
-
-    def _dc_block(self, signal: np.ndarray,
-                  x_prev: float, y_prev: float) -> tuple[np.ndarray, float, float]:
-        """Remove DC offset with a simple high-pass filter."""
-        output = np.empty_like(signal)
-        R = 0.995
-
-        for i in range(len(signal)):
-            output[i] = signal[i] - x_prev + R * y_prev
-            x_prev = signal[i]
-            y_prev = output[i]
-
-        return output, x_prev, y_prev
 
     def _process_events(self) -> None:
         while not self.event_queue.empty():
@@ -355,7 +297,20 @@ class Mixer:
                 note = event.data
                 if note in self._voices:
                     self._voices[note].note_off()
-                # Pass stop definitions for per-pipe voicing
+
+                # Voice stealing: if at max, kill the quietest releasing voice
+                if len(self._voices) >= MAX_VOICES:
+                    # Find a releasing (not actively held) voice to steal
+                    oldest_note = None
+                    for vn, vv in self._voices.items():
+                        if not vv.is_active:
+                            oldest_note = vn
+                            break
+                    if oldest_note is None:
+                        # All voices active — steal first one
+                        oldest_note = next(iter(self._voices))
+                    del self._voices[oldest_note]
+
                 stop_defs = list(self._active_stop_defs.values())
                 self._voices[note] = OrganVoice(
                     note, self.sample_rate, stop_defs=stop_defs
@@ -403,26 +358,20 @@ class Mixer:
             for note in dead_notes:
                 del self._voices[note]
 
-        # Voice normalization: prevent distortion from stacking voices
-        # Scale by 1/sqrt(n) — keeps single notes full, chords balanced
+        # Voice normalization
         if active_count > 1:
-            mono /= np.sqrt(active_count).astype(np.float32)
+            mono *= (1.0 / np.sqrt(active_count))
 
-        # Add sub-bass room resonance (reacts to playing)
+        # DC removal (vectorized — just subtract mean)
+        mono -= np.mean(mono)
+
+        # Sub-bass room resonance
         mono = self._room_resonance.process(mono, has_voices)
 
         # Stereo cathedral reverb
         left, right = self._stereo_reverb.process(mono)
 
-        # DC blocking (stereo)
-        left, self._dc_x_prev_l, self._dc_y_prev_l = self._dc_block(
-            left, self._dc_x_prev_l, self._dc_y_prev_l
-        )
-        right, self._dc_x_prev_r, self._dc_y_prev_r = self._dc_block(
-            right, self._dc_x_prev_r, self._dc_y_prev_r
-        )
-
-        # Warm saturation (tube-style soft clipping) — stereo
+        # Warm saturation (fully vectorized)
         def _saturate(signal: np.ndarray) -> np.ndarray:
             scaled = signal * self._master_volume
             return np.where(
@@ -434,9 +383,7 @@ class Mixer:
         left = _saturate(left)
         right = _saturate(right)
 
-        # Pack into stereo array
-        stereo = np.column_stack((left, right))
-        return stereo
+        return np.column_stack((left, right))
 
     # ── Convenience methods for the GUI thread ──────────────────────
 
