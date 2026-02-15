@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("color: #d4a574; margin-bottom: 2px;")
         layout.addWidget(title)
 
-        subtitle = QLabel("Pipe Organ Synthesizer  ·  Keys: Z–M / Q–U  ·  Octave: ← →")
+        subtitle = QLabel("Pipe Organ Synthesizer  ·  Keys: Z–M / Y–]  ·  Octave: ← →")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet("color: #8a7a6a; font-size: 12px; margin-bottom: 4px;")
         layout.addWidget(subtitle)

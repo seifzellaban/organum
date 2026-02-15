@@ -69,8 +69,8 @@ class OrganVoice:
             self._chiff_amount = 0.012
             chiff_ms = 15.0
             self._noise_level = 0.004
-            attack_ms = 35.0
-            release_ms = 350.0
+            attack_ms = 45.0
+            release_ms = 800.0
             waveform = "principal"
 
         self._stop_waveform = waveform
@@ -89,9 +89,9 @@ class OrganVoice:
             sample_rate=sample_rate,
             attack_ms=actual_attack,
             decay_ms=60.0,
-            sustain=0.88,
+            sustain=0.92,
             release_ms=release_ms,
-            attack_curve=1.6,
+            attack_curve=1.4,
         )
 
         nyquist = sample_rate / 2.0

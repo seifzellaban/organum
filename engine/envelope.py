@@ -39,11 +39,11 @@ class Envelope:
     def __init__(
         self,
         sample_rate: int = 44100,
-        attack_ms: float = 35.0,
+        attack_ms: float = 45.0,
         decay_ms: float = 60.0,
-        sustain: float = 0.88,
-        release_ms: float = 350.0,
-        attack_curve: float = 1.6,  # >1 = exponential (closer to 1 = smoother)
+        sustain: float = 0.92,
+        release_ms: float = 800.0,
+        attack_curve: float = 1.4,  # slight fade-in — pipe "speaks"
     ) -> None:
         self._sample_rate = sample_rate
         self._stage = Stage.IDLE
@@ -111,11 +111,11 @@ class Envelope:
                     self._stage = Stage.SUSTAIN
                     continue
 
-                # Exponential decay — fast initial drop, slow approach to sustain
+                # Gentle decay — slow, smooth approach to sustain
                 t = np.arange(self._decay_pos, self._decay_pos + n,
                               dtype=np.float32) / self._decay_samples
                 decay_range = 1.0 - self._sustain_level
-                curve = 1.0 - decay_range * (1.0 - np.exp(-3.0 * t)) / (1.0 - np.exp(-3.0))
+                curve = 1.0 - decay_range * (1.0 - np.exp(-1.5 * t)) / (1.0 - np.exp(-1.5))
                 out[pos:pos + n] = curve
                 self._decay_pos += n
                 self._level = float(curve[-1])
@@ -131,22 +131,20 @@ class Envelope:
                 pos += remaining
 
             elif self._stage == Stage.RELEASE:
-                n = min(remaining, self._release_samples - self._release_pos)
-                if n <= 0:
-                    self._level = 0.0
-                    self._stage = Stage.IDLE
-                    continue
+                # No fixed cutoff — keep decaying until naturally silent
+                n = remaining
 
-                # Exponential release — starts from current level, smooth decay
+                # Gentle release — pipe slowly stops speaking as wind bleeds out
                 t = np.arange(self._release_pos, self._release_pos + n,
                               dtype=np.float32) / self._release_samples
-                curve = self._release_start_level * np.exp(-4.0 * t)
+                curve = self._release_start_level * np.exp(-1.8 * t)
                 out[pos:pos + n] = curve
                 self._release_pos += n
                 self._level = float(curve[-1])
                 pos += n
 
-                if self._release_pos >= self._release_samples:
+                # Only go silent when truly inaudible
+                if self._level < 0.005:
                     self._level = 0.0
                     self._stage = Stage.IDLE
 

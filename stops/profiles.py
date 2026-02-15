@@ -23,8 +23,8 @@ class StopDefinition:
     chiff_amount: float = 0.015     # Attack chiff noise intensity
     chiff_ms: float = 15.0          # Chiff duration in ms
     wind_noise: float = 0.004       # Continuous wind noise level
-    attack_ms: float = 35.0         # Envelope attack time
-    release_ms: float = 350.0       # Envelope release time
+    attack_ms: float = 45.0         # Envelope attack time
+    release_ms: float = 800.0       # Envelope release time
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -43,8 +43,8 @@ PRINCIPAL_8_DEF = StopDefinition(
     chiff_amount=0.015,
     chiff_ms=12.0,
     wind_noise=0.004,
-    attack_ms=25.0,
-    release_ms=280.0,
+    attack_ms=35.0,
+    release_ms=650.0,
 )
 
 FLUTE_8_DEF = StopDefinition(
@@ -58,8 +58,8 @@ FLUTE_8_DEF = StopDefinition(
     chiff_amount=0.02,
     chiff_ms=20.0,
     wind_noise=0.006,
-    attack_ms=30.0,
-    release_ms=300.0,
+    attack_ms=45.0,
+    release_ms=750.0,
 )
 
 GEDACKT_8_DEF = StopDefinition(
@@ -73,8 +73,8 @@ GEDACKT_8_DEF = StopDefinition(
     chiff_amount=0.018,
     chiff_ms=18.0,
     wind_noise=0.005,
-    attack_ms=28.0,
-    release_ms=300.0,
+    attack_ms=40.0,
+    release_ms=700.0,
 )
 
 OCTAVE_4_DEF = StopDefinition(
@@ -88,8 +88,8 @@ OCTAVE_4_DEF = StopDefinition(
     chiff_amount=0.009, # Reduced from 0.012
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=25.0,     # Increased from 18.0
-    release_ms=280.0,   # Increased from 250.0
+    attack_ms=30.0,
+    release_ms=600.0,
 )
 
 REED_8_DEF = StopDefinition(
@@ -106,8 +106,8 @@ REED_8_DEF = StopDefinition(
     chiff_amount=0.010,
     chiff_ms=8.0,
     wind_noise=0.003,
-    attack_ms=15.0,
-    release_ms=180.0,
+    attack_ms=25.0,
+    release_ms=450.0,
 )
 
 MIXTURE_DEF = StopDefinition(
@@ -121,8 +121,8 @@ MIXTURE_DEF = StopDefinition(
     chiff_amount=0.012,
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=18.0,
-    release_ms=250.0,
+    attack_ms=28.0,
+    release_ms=550.0,
 )
 
 BOURDON_16_DEF = StopDefinition(
@@ -136,8 +136,8 @@ BOURDON_16_DEF = StopDefinition(
     chiff_amount=0.025,
     chiff_ms=28.0,
     wind_noise=0.007,
-    attack_ms=40.0,
-    release_ms=400.0,
+    attack_ms=50.0,
+    release_ms=1000.0,
 )
 
 VOX_CELESTE_DEF = StopDefinition(
@@ -152,8 +152,8 @@ VOX_CELESTE_DEF = StopDefinition(
     chiff_amount=0.008,
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=35.0,
-    release_ms=380.0,
+    attack_ms=45.0,
+    release_ms=900.0,
 )
 
 # ──────────────────────────────────────────────────────────────────────

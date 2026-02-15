@@ -1,7 +1,7 @@
 """Real-time audio output via sounddevice.
 
-Opens a low-latency OutputStream with a callback that pulls rendered audio
-from the Mixer each block.
+Opens a low-latency OutputStream with a callback that pulls rendered
+stereo audio from the Mixer each block.
 """
 
 import numpy as np
@@ -10,7 +10,7 @@ from engine.mixer import Mixer
 
 
 SAMPLE_RATE = 44100
-BLOCK_SIZE = 2048  # ~46ms latency — provides headroom for cathedral reverb + voicing
+BLOCK_SIZE = 4096  # ~93ms latency — headroom for stereo cathedral reverb
 
 
 class AudioEngine:
@@ -30,10 +30,16 @@ class AudioEngine:
         if status:
             print(f"[audio] {status}")
 
-        audio = self._mixer.render(frames)
-        outdata[:, 0] = audio
-        if outdata.shape[1] > 1:
-            outdata[:, 1] = audio
+        # Mixer now returns stereo (num_frames, 2)
+        stereo = self._mixer.render(frames)
+
+        if stereo.ndim == 2 and stereo.shape[1] == 2:
+            outdata[:] = stereo
+        else:
+            # Fallback: mono signal
+            outdata[:, 0] = stereo.ravel()[:frames]
+            if outdata.shape[1] > 1:
+                outdata[:, 1] = stereo.ravel()[:frames]
 
     def start(self) -> None:
         self._stream = sd.OutputStream(
@@ -45,7 +51,7 @@ class AudioEngine:
             latency="low",
         )
         self._stream.start()
-        print(f"[audio] Stream started: {SAMPLE_RATE}Hz, {BLOCK_SIZE} frames/block")
+        print(f"[audio] Stream started: {SAMPLE_RATE}Hz, {BLOCK_SIZE} frames/block, stereo")
 
     def stop(self) -> None:
         if self._stream is not None:
