@@ -38,6 +38,9 @@ class MidiPlayer:
         self._position = 0.0  # seconds
         self._duration = 0.0  # seconds
 
+        # Active notes for keyboard visualization
+        self._active_notes: set[int] = set()
+
     @property
     def state(self) -> PlayerState:
         return self._state
@@ -63,6 +66,11 @@ class MidiPlayer:
     @tempo_multiplier.setter
     def tempo_multiplier(self, value: float) -> None:
         self._tempo_multiplier = max(0.25, min(4.0, value))
+
+    @property
+    def active_notes(self) -> set[int]:
+        """Currently sounding MIDI notes (for keyboard visualization)."""
+        return set(self._active_notes)  # Return copy for thread safety
 
     def load(self, file_path: str) -> bool:
         """Load a MIDI file. Returns True on success."""
@@ -120,6 +128,7 @@ class MidiPlayer:
 
         self._state = PlayerState.STOPPED
         self._position = 0.0
+        self._active_notes.clear()
 
         # Release any lingering notes
         for note in range(128):
@@ -165,10 +174,13 @@ class MidiPlayer:
                 if msg.type == "note_on":
                     if msg.velocity > 0:
                         self._mixer.note_on(msg.note)
+                        self._active_notes.add(msg.note)
                     else:
                         self._mixer.note_off(msg.note)
+                        self._active_notes.discard(msg.note)
                 elif msg.type == "note_off":
                     self._mixer.note_off(msg.note)
+                    self._active_notes.discard(msg.note)
 
         except Exception as e:
             print(f"[midi] Playback error: {e}")
@@ -176,6 +188,7 @@ class MidiPlayer:
         # Clean up
         for note in range(128):
             self._mixer.note_off(note)
+        self._active_notes.clear()
 
         self._state = PlayerState.STOPPED
         self._position = 0.0

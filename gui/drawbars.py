@@ -67,7 +67,7 @@ class DrawbarPanel(QGroupBox):
             }
         """)
 
-    def _slider_style(self, index: int) -> str:
+    def _slider_style(self, index: int, highlighted: bool = False) -> str:
         # Alternate colors for visual variety (Hammond tradition: white/black drawbars)
         colors = [
             "#cc8844", "#cc8844",  # Brown (sub harmonics)
@@ -80,12 +80,14 @@ class DrawbarPanel(QGroupBox):
             "#dddddd",              # White
         ]
         color = colors[index] if index < len(colors) else "#cc8844"
+        groove_border = "#ffd700" if highlighted else "#5a4a3a"
+        groove_width = "2px" if highlighted else "1px"
         return f"""
             QSlider::groove:vertical {{
                 background: #2a1a0a;
                 width: 18px;
                 border-radius: 4px;
-                border: 1px solid #5a4a3a;
+                border: {groove_width} solid {groove_border};
             }}
             QSlider::handle:vertical {{
                 background: {color};
@@ -103,3 +105,28 @@ class DrawbarPanel(QGroupBox):
     def _on_change(self, index: int, value: int, label: QLabel) -> None:
         label.setText(str(value))
         self.drawbar_changed.emit(index, value / 8.0)
+
+    def highlight_drawbar(self, index: int) -> None:
+        """Visually highlight the selected drawbar."""
+        for i, slider in enumerate(self._sliders):
+            if i == index:
+                slider.setStyleSheet(self._slider_style(i, highlighted=True))
+            else:
+                slider.setStyleSheet(self._slider_style(i, highlighted=False))
+
+    def adjust_drawbar(self, index: int, delta: int) -> None:
+        """Adjust drawbar value by delta steps (+1 or -1)."""
+        if 0 <= index < len(self._sliders):
+            slider = self._sliders[index]
+            new_val = max(0, min(8, slider.value() + delta))
+            slider.setValue(new_val)
+
+    def set_values(self, values: list[int]) -> None:
+        """Set all drawbar positions at once (values 0–8).
+
+        This triggers valueChanged on each slider, which in turn emits
+        drawbar_changed signals — so the mixer stays in sync.
+        """
+        for i, val in enumerate(values):
+            if i < len(self._sliders):
+                self._sliders[i].setValue(max(0, min(8, val)))

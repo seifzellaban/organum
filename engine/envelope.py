@@ -70,9 +70,26 @@ class Envelope:
             self._release_pos = 0
             self._release_start_level = self._level
 
+    def retrigger(self) -> None:
+        """Re-enter attack from current level (valve re-opens, pipe still resonating)."""
+        if self._stage in (Stage.RELEASE, Stage.IDLE):
+            self._stage = Stage.ATTACK
+            # Start attack from current level — no jump to zero
+            # Scale attack_pos so the curve continues from _level
+            if self._level > 0:
+                # Invert the attack curve to find the right position
+                t_approx = self._level ** (1.0 / self._attack_curve)
+                self._attack_pos = int(t_approx * self._attack_samples)
+            else:
+                self._attack_pos = 0
+
     @property
     def is_active(self) -> bool:
         return self._stage != Stage.IDLE
+
+    @property
+    def is_releasing(self) -> bool:
+        return self._stage == Stage.RELEASE
 
     def render(self, num_frames: int) -> np.ndarray:
         """Vectorized envelope rendering with shaped curves."""

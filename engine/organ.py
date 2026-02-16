@@ -146,9 +146,17 @@ class OrganVoice:
     def note_off(self) -> None:
         self._envelope.note_off()
 
+    def retrigger(self) -> None:
+        """Re-open the valve while pipe still resonates — no new oscillators."""
+        self._envelope.retrigger()
+
     @property
     def is_active(self) -> bool:
         return self._envelope.is_active
+
+    @property
+    def is_releasing(self) -> bool:
+        return self._envelope.is_releasing
 
     def render(
         self,

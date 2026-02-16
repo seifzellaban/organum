@@ -28,6 +28,7 @@ class StopDefinition:
     is_tremulant: bool = False       # True = not a pipe rank, but an effect
     tremulant_depth: float = 0.0     # Amplitude modulation depth (0–1)
     tremulant_rate: float = 6.5      # Amplitude modulation rate (Hz)
+    tremulant_pitch_cents: float = 0.0  # Pitch modulation depth in cents
     pitch_shift: float = 1.0         # Pitch multiplier (e.g. 2.0 = octave up)
     is_mutation: bool = False        # True = mutation rank (fixed pitch ratio)
 
@@ -227,13 +228,14 @@ VOIX_HUMAINE_DEF = StopDefinition(
 
 # TREMULANT — Not a pipe rank. A mechanical wind regulator effect.
 # Modulates amplitude + pitch of ALL active stops for a pulsating,
-# breathing quality. Thrust vectoring.
+# breathing quality. Beast mode: deep asymmetric pulsation.
 TREMULANT_DEF = StopDefinition(
     harmonics={},             # No harmonics — it's an effect, not a rank
     waveform="sine",
     is_tremulant=True,
-    tremulant_depth=0.12,     # 12% amplitude modulation
-    tremulant_rate=6.5,       # ~6.5 Hz pulsation
+    tremulant_depth=0.12,     # 35% amplitude modulation — DEEP
+    tremulant_rate=5.8,       # ~5.8 Hz — slightly slower for dramatic sweep
+    tremulant_pitch_cents=18.0,  # 18 cents pitch wobble — the "wow" factor
 )
 
 # ──────────────────────────────────────────────────────────────────────

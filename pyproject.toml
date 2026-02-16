@@ -1,7 +1,7 @@
 [project]
 name = "organum"
 version = "0.1.0"
-description = "Add your description here"
+description = "Real-time pipe organ synthesizer with additive synthesis"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

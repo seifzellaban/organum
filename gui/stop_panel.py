@@ -246,6 +246,16 @@ class StopPanel(QGroupBox):
             }
         """
 
+    def update_stops(self, active_stops: set[str]) -> None:
+        """Sync all button visual states with the given set of active stops."""
+        for name, btn in self._buttons.items():
+            is_active = name in active_stops
+            btn.setChecked(is_active)
+            if name == "Tremulant":
+                btn.setStyleSheet(self._tremulant_style(is_active))
+            else:
+                btn.setStyleSheet(self._button_style(is_active))
+
     def _on_toggle(self, name: str, checked: bool) -> None:
         btn = self._buttons[name]
         if name == "Tremulant":

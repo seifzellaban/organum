@@ -6,7 +6,6 @@ with numpy — no per-sample Python loops in the audio path.
 """
 
 import math
-
 from dataclasses import dataclass
 from enum import Enum
 from queue import SimpleQueue
@@ -23,6 +22,7 @@ class EventType(Enum):
     NOTE_OFF = "note_off"
     DRAWBAR_CHANGE = "drawbar_change"
     STOP_TOGGLE = "stop_toggle"
+    ROOM_PRESET = "room_preset"
 
 
 @dataclass
@@ -113,6 +113,9 @@ class AllpassFilter:
 class CathedralReverb:
     """Schroeder reverb: parallel comb filters + series allpass filters.
     Fully vectorized — no per-sample Python loops.
+
+    Tuned for a grand cathedral acoustic: long RT60, dense diffusion,
+    significant predelay for spaciousness.
     """
 
     def __init__(
@@ -134,10 +137,12 @@ class CathedralReverb:
             for d in base_delays
         ]
 
+        # 4 allpass stages for denser, more diffuse tail
         self._allpasses = [
             AllpassFilter(241, gain=0.6),
             AllpassFilter(557, gain=0.55),
             AllpassFilter(373, gain=0.5),
+            AllpassFilter(829, gain=0.45),
         ]
 
         self._wet = wet
@@ -185,27 +190,119 @@ class CathedralReverb:
         return signal * self._dry + reverb * self._wet
 
 
-class StereoReverb:
-    """Stereo cathedral reverb — two independent reverb units."""
+# ── Room preset definitions ──────────────────────────────────────────
+# Each preset is a dict of parameters for the StereoReverb constructor.
 
-    def __init__(self, sample_rate: int = 44100) -> None:
+@dataclass
+class RoomPresetParams:
+    """Parameters defining a room acoustic."""
+    name: str
+    room_size_l: float
+    room_size_r: float
+    wet: float
+    feedback: float
+    damping_l: float
+    damping_r: float
+    predelay_l: float
+    predelay_r: float
+    resonance_level: float    # Room resonance intensity
+    resonance_freqs: tuple[float, float, float]  # 3 standing wave frequencies
+
+
+ROOM_PRESETS: dict[str, RoomPresetParams] = {
+    "Grand Cathedral": RoomPresetParams(
+        name="Grand Cathedral",
+        room_size_l=1.05, room_size_r=1.10,
+        wet=0.42, feedback=0.89,
+        damping_l=0.25, damping_r=0.27,
+        predelay_l=24.0, predelay_r=32.0,
+        resonance_level=0.025,
+        resonance_freqs=(24.0, 36.0, 52.0),
+    ),
+    "Stone Chapel": RoomPresetParams(
+        name="Stone Chapel",
+        room_size_l=0.72, room_size_r=0.76,
+        wet=0.32, feedback=0.82,
+        damping_l=0.32, damping_r=0.34,
+        predelay_l=12.0, predelay_r=18.0,
+        resonance_level=0.015,
+        resonance_freqs=(32.0, 48.0, 68.0),
+    ),
+    "Concert Hall": RoomPresetParams(
+        name="Concert Hall",
+        room_size_l=0.92, room_size_r=0.96,
+        wet=0.35, feedback=0.85,
+        damping_l=0.30, damping_r=0.32,
+        predelay_l=18.0, predelay_r=26.0,
+        resonance_level=0.018,
+        resonance_freqs=(28.0, 42.0, 58.0),
+    ),
+    "Gothic Basilica": RoomPresetParams(
+        name="Gothic Basilica",
+        room_size_l=1.20, room_size_r=1.28,
+        wet=0.50, feedback=0.92,
+        damping_l=0.20, damping_r=0.22,
+        predelay_l=35.0, predelay_r=48.0,
+        resonance_level=0.032,
+        resonance_freqs=(20.0, 30.0, 44.0),
+    ),
+    "Intimate Room": RoomPresetParams(
+        name="Intimate Room",
+        room_size_l=0.50, room_size_r=0.52,
+        wet=0.18, feedback=0.70,
+        damping_l=0.45, damping_r=0.48,
+        predelay_l=5.0, predelay_r=8.0,
+        resonance_level=0.008,
+        resonance_freqs=(45.0, 65.0, 90.0),
+    ),
+    "Dry Studio": RoomPresetParams(
+        name="Dry Studio",
+        room_size_l=0.35, room_size_r=0.37,
+        wet=0.08, feedback=0.55,
+        damping_l=0.55, damping_r=0.58,
+        predelay_l=2.0, predelay_r=3.0,
+        resonance_level=0.003,
+        resonance_freqs=(55.0, 80.0, 110.0),
+    ),
+}
+
+DEFAULT_ROOM_PRESET = "Grand Cathedral"
+
+
+class StereoReverb:
+    """Grand cathedral stereo reverb — two decorrelated reverb units.
+
+    Asymmetric delay lines and different room sizes create a wide stereo
+    image. High feedback + low damping = long, shimmering tail (~4-5s RT60).
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 44100,
+        preset: RoomPresetParams | None = None,
+    ) -> None:
+        if preset is None:
+            preset = ROOM_PRESETS[DEFAULT_ROOM_PRESET]
+
+        # Left channel
         self._left = CathedralReverb(
             sample_rate,
-            room_size=0.90,
-            wet=0.28,
-            base_delays=[1687, 1601, 2053, 1867, 1511, 1327],
-            feedback=0.84,
-            damping=0.32,
-            predelay_ms=16.0,
+            room_size=preset.room_size_l,
+            wet=preset.wet,
+            base_delays=[1687, 1601, 2053, 1867, 1511, 1327, 2287],
+            feedback=preset.feedback,
+            damping=preset.damping_l,
+            predelay_ms=preset.predelay_l,
         )
+        # Right channel: slightly different for stereo width
         self._right = CathedralReverb(
             sample_rate,
-            room_size=0.93,
-            wet=0.28,
-            base_delays=[1747, 1663, 2111, 1931, 1559, 1381],
-            feedback=0.84,
-            damping=0.33,
-            predelay_ms=22.0,
+            room_size=preset.room_size_r,
+            wet=preset.wet,
+            base_delays=[1747, 1663, 2111, 1931, 1559, 1381, 2393],
+            feedback=preset.feedback,
+            damping=preset.damping_r,
+            predelay_ms=preset.predelay_r,
         )
 
     def process(self, mono_signal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -215,21 +312,27 @@ class StereoReverb:
 
 
 class RoomResonance:
-    """Sub-bass cathedral room resonance."""
+    """Sub-bass cathedral room resonance — the chest-rumbling weight.
+
+    Three resonant frequencies simulate the standing waves of a large
+    stone building. This is what makes it feel GRAND.
+    """
 
     def __init__(self, sample_rate: int = 44100) -> None:
         self._sample_rate = sample_rate
         self._phase1 = 0.0
         self._phase2 = 0.0
-        self._freq1 = 32.0
-        self._freq2 = 48.0
+        self._phase3 = 0.0
+        self._freq1 = 24.0       # Deep sub-bass — feel it in your chest
+        self._freq2 = 36.0       # Low room mode
+        self._freq3 = 52.0       # Upper room mode
         self._level_smooth = 0.0
 
     def process(self, signal: np.ndarray, has_active_voices: bool) -> np.ndarray:
         n = len(signal)
 
-        target = 0.012 if has_active_voices else 0.0
-        rate = 0.0005 if target > self._level_smooth else 0.0001
+        target = 0.025 if has_active_voices else 0.0
+        rate = 0.001 if target > self._level_smooth else 0.0002
         self._level_smooth += (target - self._level_smooth) * rate
 
         if self._level_smooth < 0.0001:
@@ -242,6 +345,9 @@ class RoomResonance:
         res2 = np.sin(
             2 * np.pi * self._freq2 * t / self._sample_rate + self._phase2
         ).astype(np.float32)
+        res3 = np.sin(
+            2 * np.pi * self._freq3 * t / self._sample_rate + self._phase3
+        ).astype(np.float32)
 
         self._phase1 = (
             self._phase1 + 2 * np.pi * self._freq1 * n / self._sample_rate
@@ -249,8 +355,11 @@ class RoomResonance:
         self._phase2 = (
             self._phase2 + 2 * np.pi * self._freq2 * n / self._sample_rate
         ) % (2 * np.pi)
+        self._phase3 = (
+            self._phase3 + 2 * np.pi * self._freq3 * n / self._sample_rate
+        ) % (2 * np.pi)
 
-        return signal + (res1 * 0.6 + res2 * 0.4) * self._level_smooth
+        return signal + (res1 * 0.45 + res2 * 0.35 + res3 * 0.20) * self._level_smooth
 
 
 # Maximum simultaneous voices (prevents CPU overload with long releases)
@@ -279,15 +388,15 @@ class Mixer:
         #     0.25, # 1'
         # ]
         self._drawbar_values: list[float] = [
-            1.0,
-            1.0,
             0.75,
             1.0,
             0.625,
             0.875,
-            0.5,
             0.375,
+            0.625,
             0.25,
+            0.25,
+            0.125,
         ]
 
         self._active_stops: dict[str, HarmonicProfile] = {
@@ -300,15 +409,18 @@ class Mixer:
             "Bourdon 16'": STOP_DEFS["Bourdon 16'"],
         }
 
-        self._master_volume = 0.32
+        self._master_volume = 0.26
+        self._current_room_preset = DEFAULT_ROOM_PRESET
         self._stereo_reverb = StereoReverb(sample_rate)
         self._room_resonance = RoomResonance(sample_rate)
 
-        # Tremulant state
+        # Tremulant state — multi-component LFO for realistic wind regulator
         self._tremulant_active = False
         self._tremulant_phase = 0.0
-        self._tremulant_depth = 0.12
-        self._tremulant_rate = 6.5
+        self._tremulant_depth = 0.12          # Default amplitude mod depth
+        self._tremulant_rate = 6.5            # Default rate (Hz)
+        self._tremulant_pitch_depth = 0.0     # Pitch modulation in cents
+        self._tremulant_drift_phase = 0.0     # Slow wander for organic feel
 
         # Mutation voice tracking: maps base note -> list of mutation voice keys
         self._mutation_keys: dict[int, list[int]] = {}
@@ -322,8 +434,20 @@ class Mixer:
 
             if event.type == EventType.NOTE_ON:
                 note = event.data
-                if note in self._voices:
-                    self._voices[note].note_off()
+
+                # ── Real wind physics: if the pipe is already speaking,
+                #    pressing the key again does nothing. The valve is
+                #    already open and wind is already flowing through the
+                #    pipe. Only if the voice is in release (key was lifted
+                #    but sound is still fading) do we retrigger smoothly
+                #    WITHOUT creating a new voice (preserves phase continuity).
+                existing = self._voices.get(note)
+                if existing is not None and existing.is_active:
+                    if existing.is_releasing:
+                        # Pipe still resonating — re-open the valve smoothly
+                        existing.retrigger()
+                    # else: pipe already fully speaking — ignore the keypress
+                    continue
 
                 # Voice stealing: if at max, kill the quietest releasing voice
                 if len(self._voices) >= MAX_VOICES:
@@ -340,8 +464,7 @@ class Mixer:
 
                 # Normal (non-mutation) stop defs for the primary voice
                 normal_defs = [
-                    sd for sd in self._active_stop_defs.values()
-                    if not sd.is_mutation
+                    sd for sd in self._active_stop_defs.values() if not sd.is_mutation
                 ]
                 if normal_defs:
                     self._voices[note] = OrganVoice(
@@ -349,26 +472,23 @@ class Mixer:
                     )
 
                 # Mutation stops get their own separate voices at shifted pitch
-                for shift_id, (sname, sd) in enumerate(
-                    self._active_stop_defs.items()
-                ):
+                for shift_id, (sname, sd) in enumerate(self._active_stop_defs.items()):
                     if sd.is_mutation:
-                        # Compute the MIDI note that corresponds to the shifted pitch
-                        # pitch_shift=3 means 3rd harmonic (12+7 = 19 semitones up)
-                        # pitch_shift=5 means 5th harmonic (12+12+4 = 28 semitones)
                         semi_shift = round(12 * math.log2(sd.pitch_shift))
                         mutation_note = note + semi_shift
 
-                        # Only create if the resulting note is reasonable
                         if 0 <= mutation_note <= 127:
                             mut_key = -(note * 1000 + shift_id + 1)
-                            if mut_key in self._voices:
-                                self._voices[mut_key].note_off()
+                            existing_mut = self._voices.get(mut_key)
+                            if existing_mut is not None and existing_mut.is_active:
+                                if existing_mut.is_releasing:
+                                    existing_mut.retrigger()
+                                continue
                             self._voices[mut_key] = OrganVoice(
-                                mutation_note, self.sample_rate,
+                                mutation_note,
+                                self.sample_rate,
                                 stop_defs=[sd],
                             )
-                            # Track which mutation keys belong to this note
                             self._mutation_keys.setdefault(note, []).append(mut_key)
 
             elif event.type == EventType.NOTE_OFF:
@@ -399,14 +519,29 @@ class Mixer:
                     if self._tremulant_active:
                         self._tremulant_depth = stop_def.tremulant_depth
                         self._tremulant_rate = stop_def.tremulant_rate
+                        self._tremulant_pitch_depth = stop_def.tremulant_pitch_cents
                     continue
 
                 if stop_name in self._active_stops:
                     del self._active_stops[stop_name]
                     del self._active_stop_defs[stop_name]
                 elif stop_name in STOP_REGISTRY:
+
                     self._active_stops[stop_name] = STOP_REGISTRY[stop_name]
                     self._active_stop_defs[stop_name] = STOP_DEFS[stop_name]
+
+            elif event.type == EventType.ROOM_PRESET:
+                preset_name = event.data
+                preset = ROOM_PRESETS.get(preset_name)
+                if preset:
+                    self._current_room_preset = preset_name
+                    self._stereo_reverb = StereoReverb(
+                        self.sample_rate, preset=preset
+                    )
+                    # Update room resonance frequencies
+                    self._room_resonance._freq1 = preset.resonance_freqs[0]
+                    self._room_resonance._freq2 = preset.resonance_freqs[1]
+                    self._room_resonance._freq3 = preset.resonance_freqs[2]
 
     def render(self, num_frames: int) -> np.ndarray:
         """Render stereo audio: returns (num_frames, 2) array."""
@@ -443,20 +578,59 @@ class Mixer:
         # Sub-bass room resonance
         mono = self._room_resonance.process(mono, has_voices)
 
-        # Tremulant: sinusoidal amplitude modulation across all voices
+        # Tremulant: POWER MODE — wind pressure surge
+        # Instead of cutting volume (choppy), the tremulant BOOSTS the signal
+        # with a slow, smooth pulsation. Engaging it makes everything LOUDER
+        # and more powerful, like opening a second wind reservoir.
         if self._tremulant_active and has_voices:
             t_frames = np.arange(num_frames, dtype=np.float32)
-            trem_lfo = 1.0 - self._tremulant_depth * (
-                0.5 + 0.5 * np.sin(
-                    2 * np.pi * self._tremulant_rate * t_frames / self.sample_rate
-                    + self._tremulant_phase
-                )
+            rate = self._tremulant_rate
+            base_angle = (
+                2 * np.pi * rate * t_frames / self.sample_rate
+                + self._tremulant_phase
             )
+
+            # Smooth LFO — fundamental + gentle 2nd harmonic for organic swell
+            # No harsh high harmonics (that's what made it choppy)
+            lfo = (
+                np.sin(base_angle) * 0.80                   # Smooth fundamental
+                + np.sin(2.0 * base_angle + 0.6) * 0.15     # Slight asymmetry
+                + np.sin(0.11 * base_angle                   # Very slow drift
+                         + self._tremulant_drift_phase) * 0.05
+            )
+
+            # Shift LFO to [0, 1] range (always positive — always boosting)
+            lfo_positive = (lfo + 1.0) * 0.5
+
+            # Amplitude: constant boost + pulsating surge on top
+            # Base boost: 20% louder just for engaging tremulant
+            # Surge: additional 0-20% pulsating on top
+            boost_base = 1.20
+            surge_depth = self._tremulant_depth * 1.5   # e.g. 0.12 * 1.5 = 0.18
+            trem_amp = boost_base + surge_depth * lfo_positive
+            mono *= trem_amp.astype(np.float32)
+
+            # Gentle pitch wobble — adds richness/shimmer without choppiness
+            if self._tremulant_pitch_depth > 0:
+                pitch_mod_semitones = self._tremulant_pitch_depth / 100.0 * 0.5
+                freq_ratio = 2.0 ** (pitch_mod_semitones * lfo / 12.0)
+                cumulative_shift = np.cumsum(freq_ratio - 1.0).astype(np.float32)
+                indices = np.arange(num_frames, dtype=np.float32) + cumulative_shift * 0.3
+                indices = np.clip(indices, 0, num_frames - 1)
+                idx_floor = indices.astype(np.int32)
+                idx_ceil = np.minimum(idx_floor + 1, num_frames - 1)
+                frac = indices - idx_floor
+                mono = mono[idx_floor] * (1.0 - frac) + mono[idx_ceil] * frac
+
+            # Advance phases
             self._tremulant_phase += (
-                2 * np.pi * self._tremulant_rate * num_frames / self.sample_rate
+                2 * np.pi * rate * num_frames / self.sample_rate
             )
-            self._tremulant_phase %= (2 * np.pi)
-            mono *= trem_lfo
+            self._tremulant_phase %= 2 * np.pi
+            self._tremulant_drift_phase += (
+                2 * np.pi * 0.11 * rate * num_frames / self.sample_rate
+            )
+            self._tremulant_drift_phase %= 2 * np.pi
 
         # Stereo cathedral reverb
         left, right = self._stereo_reverb.process(mono)
@@ -468,13 +642,13 @@ class Mixer:
         return np.column_stack((left, right))
 
     def _saturate(self, signal: np.ndarray) -> np.ndarray:
-        """Warm tube-style saturation."""
+        """Smooth tanh soft-clipper — no discontinuities, no clicks.
+
+        The old np.where approach had a threshold discontinuity that caused
+        audible clicking. tanh is continuously differentiable everywhere.
+        """
         scaled = signal * self._master_volume
-        return np.where(
-            np.abs(scaled) < 0.5,
-            scaled,
-            np.sign(scaled) * (1.0 - np.exp(-2.0 * np.abs(scaled))) * 0.7,
-        ).astype(np.float32)
+        return np.tanh(scaled * 1.8).astype(np.float32) * 0.55
 
     # ── Convenience methods for the GUI thread ──────────────────────
 
@@ -490,6 +664,9 @@ class Mixer:
     def toggle_stop(self, stop_name: str) -> None:
         self.event_queue.put(AudioEvent(EventType.STOP_TOGGLE, stop_name))
 
+    def set_room_preset(self, preset_name: str) -> None:
+        self.event_queue.put(AudioEvent(EventType.ROOM_PRESET, preset_name))
+
     @property
     def active_stop_names(self) -> set[str]:
         names = set(self._active_stops.keys())
@@ -500,3 +677,7 @@ class Mixer:
     @property
     def drawbar_values(self) -> list[float]:
         return list(self._drawbar_values)
+
+    @property
+    def current_room_preset(self) -> str:
+        return self._current_room_preset
