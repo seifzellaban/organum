@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from engine.organ import OrganVoice
-from stops.profiles import STOP_DEFS, STOP_REGISTRY, HarmonicProfile, StopDefinition
+from stops.profiles import STOP_DEFS, STOP_REGISTRY, HarmonicProfile, StopDefinition, DRAWBAR_HARMONICS
 
 
 class EventType(Enum):
@@ -425,6 +425,17 @@ class Mixer:
         # Mutation voice tracking: maps base note -> list of mutation voice keys
         self._mutation_keys: dict[int, list[int]] = {}
 
+        # Monotonic sample counter — avoids syscalls (time.monotonic) in RT thread
+        self._sample_clock: int = 0
+
+        # Smoothed normalization gain — avoids clicks when voice count changes
+        self._norm_gain: float = 1.0
+
+        # Track when each note was last released (sample clock value)
+        # Used to suppress transients on rapid re-strikes (<500ms)
+        self._note_release_samples: dict[int, int] = {}
+        self._restrike_window_samples = int(0.5 * sample_rate)  # 500ms
+
     def _process_events(self) -> None:
         while not self.event_queue.empty():
             try:
@@ -449,6 +460,15 @@ class Mixer:
                     # else: pipe already fully speaking — ignore the keypress
                     continue
 
+                # Suppress chiff/tracker click on rapid re-strikes (<500ms)
+                # so repeated keystrokes don't sound like a machine gun.
+                # Uses sample clock instead of syscall for RT safety.
+                last_release = self._note_release_samples.get(note, 0)
+                rapid_restrike = (
+                    (self._sample_clock - last_release)
+                    < self._restrike_window_samples
+                )
+
                 # Voice stealing: if at max, kill the quietest releasing voice
                 if len(self._voices) >= MAX_VOICES:
                     # Find a releasing (not actively held) voice to steal
@@ -468,7 +488,8 @@ class Mixer:
                 ]
                 if normal_defs:
                     self._voices[note] = OrganVoice(
-                        note, self.sample_rate, stop_defs=normal_defs
+                        note, self.sample_rate, stop_defs=normal_defs,
+                        suppress_transients=rapid_restrike,
                     )
 
                 # Mutation stops get their own separate voices at shifted pitch
@@ -488,11 +509,13 @@ class Mixer:
                                 mutation_note,
                                 self.sample_rate,
                                 stop_defs=[sd],
+                                suppress_transients=rapid_restrike,
                             )
                             self._mutation_keys.setdefault(note, []).append(mut_key)
 
             elif event.type == EventType.NOTE_OFF:
                 note = event.data
+                self._note_release_samples[note] = self._sample_clock
                 if note in self._voices:
                     self._voices[note].note_off()
                 # Also release any mutation voices for this note
@@ -546,6 +569,7 @@ class Mixer:
     def render(self, num_frames: int) -> np.ndarray:
         """Render stereo audio: returns (num_frames, 2) array."""
         self._process_events()
+        self._sample_clock += num_frames
 
         mono = np.zeros(num_frames, dtype=np.float32)
         stop_profiles = list(self._active_stops.values())
@@ -554,12 +578,22 @@ class Mixer:
         active_count = 0
 
         if stop_profiles:
+            # Pre-compute harmonic amplitudes once per block (same for all voices)
+            harmonic_amps = np.zeros(len(DRAWBAR_HARMONICS), dtype=np.float32)
+            for profile in stop_profiles:
+                for i, h in enumerate(DRAWBAR_HARMONICS):
+                    h_int = int(round(h)) if h >= 1 else 1
+                    if h_int in profile:
+                        harmonic_amps[i] += profile[h_int] * self._drawbar_values[i]
+            if len(stop_profiles) > 1:
+                max_amp = harmonic_amps.max()
+                if max_amp > 1.0:
+                    harmonic_amps /= max_amp
+
             dead_notes: list[int] = []
             for note, voice in self._voices.items():
                 if voice.is_active:
-                    mono += voice.render(
-                        num_frames, self._drawbar_values, stop_profiles
-                    )
+                    mono += voice.render(num_frames, harmonic_amps)
                     has_voices = True
                     active_count += 1
                 else:
@@ -568,9 +602,18 @@ class Mixer:
             for note in dead_notes:
                 del self._voices[note]
 
-        # Voice normalization
-        if active_count > 1:
-            mono *= 1.0 / np.sqrt(active_count)
+        # Voice normalization with smooth gain ramp (no clicks)
+        # Hard 1/sqrt(n) causes a 30% pop when going from 1->2 voices.
+        # Instead, smoothly ramp from previous gain to new target.
+        target_gain = 1.0 / np.sqrt(max(active_count, 1))
+        if abs(target_gain - self._norm_gain) > 0.001:
+            ramp = np.linspace(
+                self._norm_gain, target_gain, num_frames, dtype=np.float32
+            )
+            mono *= ramp
+        else:
+            mono *= target_gain
+        self._norm_gain = target_gain
 
         # DC removal (vectorized — just subtract mean)
         mono -= np.mean(mono)
@@ -610,18 +653,6 @@ class Mixer:
             trem_amp = boost_base + surge_depth * lfo_positive
             mono *= trem_amp.astype(np.float32)
 
-            # Gentle pitch wobble — adds richness/shimmer without choppiness
-            if self._tremulant_pitch_depth > 0:
-                pitch_mod_semitones = self._tremulant_pitch_depth / 100.0 * 0.5
-                freq_ratio = 2.0 ** (pitch_mod_semitones * lfo / 12.0)
-                cumulative_shift = np.cumsum(freq_ratio - 1.0).astype(np.float32)
-                indices = np.arange(num_frames, dtype=np.float32) + cumulative_shift * 0.3
-                indices = np.clip(indices, 0, num_frames - 1)
-                idx_floor = indices.astype(np.int32)
-                idx_ceil = np.minimum(idx_floor + 1, num_frames - 1)
-                frac = indices - idx_floor
-                mono = mono[idx_floor] * (1.0 - frac) + mono[idx_ceil] * frac
-
             # Advance phases
             self._tremulant_phase += (
                 2 * np.pi * rate * num_frames / self.sample_rate
@@ -648,7 +679,9 @@ class Mixer:
         audible clicking. tanh is continuously differentiable everywhere.
         """
         scaled = signal * self._master_volume
-        return np.tanh(scaled * 1.8).astype(np.float32) * 0.55
+        # Add a tiny bit of asymmetry for even harmonics (tube-like warmth)
+        scaled += 0.03 * (scaled ** 2)
+        return np.tanh(scaled * 2.0).astype(np.float32) * 0.55
 
     # ── Convenience methods for the GUI thread ──────────────────────
 

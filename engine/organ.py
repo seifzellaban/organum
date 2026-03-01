@@ -43,13 +43,14 @@ class OrganVoice:
 
     # Tracker action click — the mechanical sound of the key valve opening
     TRACKER_CLICK_MS = 2.0
-    TRACKER_CLICK_LEVEL = 0.006
+    TRACKER_CLICK_LEVEL = 0.002
 
     def __init__(
         self,
         note: int,
         sample_rate: int = 44100,
         stop_defs: list[StopDefinition] | None = None,
+        suppress_transients: bool = False,
     ) -> None:
         self.note = note
         self._fundamental = midi_to_freq(note)
@@ -61,7 +62,7 @@ class OrganVoice:
             chorus_detune = sum(s.chorus_detune for s in stop_defs) / n
             vibrato_depth = sum(s.vibrato_depth for s in stop_defs) / n
             vibrato_rate = sum(s.vibrato_rate for s in stop_defs) / n
-            self._chiff_amount = sum(s.chiff_amount for s in stop_defs) / n * 0.6
+            self._chiff_amount = sum(s.chiff_amount for s in stop_defs) / n * 0.25
             chiff_ms = sum(s.chiff_ms for s in stop_defs) / n
             self._noise_level = sum(s.wind_noise for s in stop_defs) / n
             attack_ms = sum(s.attack_ms for s in stop_defs) / n
@@ -75,8 +76,8 @@ class OrganVoice:
             self._chiff_amount = 0.012
             chiff_ms = 15.0
             self._noise_level = 0.004
-            attack_ms = 45.0
-            release_ms = 800.0
+            attack_ms = 65.0
+            release_ms = 900.0
             waveform = "principal"
 
         self._stop_waveform = waveform
@@ -109,6 +110,11 @@ class OrganVoice:
         for h in DRAWBAR_HARMONICS:
             freq = self._fundamental * h
             if freq < nyquist:
+                # Widening the chorus detune for bass notes makes them massive
+                h_detune = actual_detune
+                if freq < 130.0:
+                    h_detune *= 1.5
+
                 self._oscillators_a.append(
                     Oscillator(freq, sample_rate,
                               vibrato_depth=actual_vibrato_depth,
@@ -117,7 +123,7 @@ class OrganVoice:
                 )
                 # Chorus partner — slightly different waveform and detuning
                 self._oscillators_b.append(
-                    Oscillator(freq + actual_detune, sample_rate,
+                    Oscillator(freq + h_detune, sample_rate,
                               vibrato_depth=actual_vibrato_depth * 0.7,
                               vibrato_rate=vibrato_rate * 1.07,
                               waveform=waveform)
@@ -126,13 +132,20 @@ class OrganVoice:
                 self._oscillators_a.append(None)
                 self._oscillators_b.append(None)
 
-        # Chiff: high-frequency pipe speech transient
-        self._chiff_samples_left = int(chiff_ms * sample_rate / 1000)
-        self._chiff_pos = pipe_rand.integers(0, _CHIFF_TABLE_SIZE - 4096)
-
-        # Tracker click: brief mechanical impulse
-        self._tracker_click_left = int(self.TRACKER_CLICK_MS * sample_rate / 1000)
-        self._tracker_click_phase = 0.0
+        # Chiff and tracker click: suppress on rapid re-strikes to avoid
+        # machine-gun percussive artifacts. Only the first strike gets them.
+        if suppress_transients:
+            self._chiff_samples_left = 0
+            self._chiff_pos = 0
+            self._tracker_click_left = 0
+            self._tracker_click_phase = 0.0
+        else:
+            # Chiff: high-frequency pipe speech transient
+            self._chiff_samples_left = int(chiff_ms * sample_rate / 1000)
+            self._chiff_pos = pipe_rand.integers(0, _CHIFF_TABLE_SIZE - 4096)
+            # Tracker click: brief mechanical impulse
+            self._tracker_click_left = int(self.TRACKER_CLICK_MS * sample_rate / 1000)
+            self._tracker_click_phase = 0.0
 
         # Wind flutter: slow random modulation of amplitude
         self._wind_flutter_phase = pipe_rand.uniform(0, 2 * np.pi)
@@ -147,7 +160,11 @@ class OrganVoice:
         self._envelope.note_off()
 
     def retrigger(self) -> None:
-        """Re-open the valve while pipe still resonates — no new oscillators."""
+        """Re-open the valve while pipe still resonates — no new oscillators.
+
+        Uses smooth crossfade back to sustain instead of re-attacking.
+        Preserves oscillator phase continuity for seamless re-entry.
+        """
         self._envelope.retrigger()
 
     @property
@@ -161,36 +178,37 @@ class OrganVoice:
     def render(
         self,
         num_frames: int,
-        drawbar_values: list[float],
-        stop_profiles: list[dict[int, float]],
+        harmonic_amps: np.ndarray,
     ) -> np.ndarray:
-        """Render audio with chorus, chiff, tracker action, and wind noise."""
-        # Pre-compute effective amplitude per drawbar harmonic
-        harmonic_amps = np.zeros(len(DRAWBAR_HARMONICS), dtype=np.float32)
+        """Render audio with chorus, chiff, tracker action, and wind noise.
 
-        for profile in stop_profiles:
-            for i, h in enumerate(DRAWBAR_HARMONICS):
-                h_int = int(round(h)) if h >= 1 else 1
-                if h_int in profile:
-                    harmonic_amps[i] += profile[h_int] * drawbar_values[i]
-
-        # Normalize if multiple stops
-        if len(stop_profiles) > 1:
-            max_amp = harmonic_amps.max()
-            if max_amp > 1.0:
-                harmonic_amps /= max_amp
+        Args:
+            num_frames: Number of audio frames to render.
+            harmonic_amps: Pre-computed amplitude per drawbar harmonic
+                (computed once per block in the mixer).
+        """
 
         # Sum oscillator pairs (chorus)
         output = np.zeros(num_frames, dtype=np.float32)
         for i in range(len(DRAWBAR_HARMONICS)):
-            if harmonic_amps[i] < 0.001:
+            if harmonic_amps[i] < 0.01:
                 continue
             amp = harmonic_amps[i]
             osc_a = self._oscillators_a[i]
             osc_b = self._oscillators_b[i]
+            
+            # Boost lower frequencies to make them sound grander
+            if osc_a is not None:
+                freq = osc_a._frequency
+                if freq < 260.0:
+                    bass_boost = 1.0 + 0.7 * ((260.0 - freq) / 260.0)**1.5
+                    amp *= bass_boost
+
             if osc_a is not None:
                 output += osc_a.render(num_frames) * (amp * 0.55)
-            if osc_b is not None:
+            # Skip chorus partner for quiet harmonics — detuning barely
+            # audible below 0.15 and each render is expensive
+            if osc_b is not None and amp >= 0.15:
                 output += osc_b.render(num_frames) * (amp * 0.45)
 
         # Tracker click: very brief mechanical impulse at note start
@@ -224,14 +242,12 @@ class OrganVoice:
             self._chiff_samples_left -= n
 
         # Wind flutter: slow amplitude modulation for "breathing" quality
-        t_frames = np.arange(num_frames, dtype=np.float32)
-        flutter = 1.0 + 0.004 * np.sin(
-            2 * np.pi * self._wind_flutter_rate * t_frames / self._sample_rate
-            + self._wind_flutter_phase
-        )
+        # Rate is 0.3-0.8Hz (period 1-3s), essentially constant within a 93ms block
+        flutter = 1.0 + 0.004 * np.sin(self._wind_flutter_phase)
         self._wind_flutter_phase += (
             2 * np.pi * self._wind_flutter_rate * num_frames / self._sample_rate
         )
+        self._wind_flutter_phase %= (2 * np.pi)
         output *= flutter
 
         # Subtle wind noise (continuous, very low amplitude with variation)

@@ -16,6 +16,7 @@ class Stage(IntEnum):
     DECAY = 2
     SUSTAIN = 3
     RELEASE = 4
+    RETRIGGER = 5  # Smooth crossfade back to sustain (no click)
 
 
 class Envelope:
@@ -34,6 +35,9 @@ class Envelope:
         "_release_pos",
         "_release_start_level",
         "_attack_curve",
+        "_retrigger_pos",
+        "_retrigger_samples",
+        "_retrigger_start_level",
     )
 
     def __init__(
@@ -60,6 +64,11 @@ class Envelope:
         self._release_pos = 0
         self._release_start_level = 0.0
 
+        # Retrigger: short crossfade ramp (~15ms)
+        self._retrigger_samples = max(1, int(15.0 * sample_rate / 1000))
+        self._retrigger_pos = 0
+        self._retrigger_start_level = 0.0
+
     def note_on(self) -> None:
         self._stage = Stage.ATTACK
         self._attack_pos = 0
@@ -71,17 +80,11 @@ class Envelope:
             self._release_start_level = self._level
 
     def retrigger(self) -> None:
-        """Re-enter attack from current level (valve re-opens, pipe still resonating)."""
+        """Smoothly ramp back to sustain — no click, no new attack transient."""
         if self._stage in (Stage.RELEASE, Stage.IDLE):
-            self._stage = Stage.ATTACK
-            # Start attack from current level — no jump to zero
-            # Scale attack_pos so the curve continues from _level
-            if self._level > 0:
-                # Invert the attack curve to find the right position
-                t_approx = self._level ** (1.0 / self._attack_curve)
-                self._attack_pos = int(t_approx * self._attack_samples)
-            else:
-                self._attack_pos = 0
+            self._retrigger_start_level = self._level
+            self._retrigger_pos = 0
+            self._stage = Stage.RETRIGGER
 
     @property
     def is_active(self) -> bool:
@@ -107,10 +110,11 @@ class Envelope:
                     self._decay_pos = 0
                     continue
 
-                # Exponential attack curve — starts slow, accelerates
+                # Smoothstep attack — pipe wind fills gradually then eases in
+                # Zero derivative at both ends: no harsh onset, no slam into sustain
                 t = np.arange(self._attack_pos, self._attack_pos + n,
                               dtype=np.float32) / self._attack_samples
-                curve = t ** self._attack_curve
+                curve = t * t * (3.0 - 2.0 * t)  # smoothstep: starts gentle, ends gentle
                 out[pos:pos + n] = curve
                 self._attack_pos += n
                 self._level = float(curve[-1])
@@ -151,19 +155,46 @@ class Envelope:
                 # No fixed cutoff — keep decaying until naturally silent
                 n = remaining
 
-                # Gentle release — pipe slowly stops speaking as wind bleeds out
+                # Gentle exponential release — pipe wind bleeds out slowly.
+                # exp(-1.2*t) reaches 50% at t≈0.58 (≈375ms for a 650ms release)
+                # which feels like a natural, lingering decay.
                 t = np.arange(self._release_pos, self._release_pos + n,
                               dtype=np.float32) / self._release_samples
-                curve = self._release_start_level * np.exp(-1.8 * t)
+                curve = self._release_start_level * np.exp(-1.2 * t)
                 out[pos:pos + n] = curve
                 self._release_pos += n
                 self._level = float(curve[-1])
                 pos += n
 
                 # Only go silent when truly inaudible
-                if self._level < 0.005:
+                if self._level < 0.003:
                     self._level = 0.0
                     self._stage = Stage.IDLE
+
+            elif self._stage == Stage.RETRIGGER:
+                # Smooth crossfade from current level back to sustain
+                n = min(remaining, self._retrigger_samples - self._retrigger_pos)
+                if n <= 0:
+                    self._level = self._sustain_level
+                    self._stage = Stage.SUSTAIN
+                    continue
+
+                t = np.arange(self._retrigger_pos, self._retrigger_pos + n,
+                              dtype=np.float32) / self._retrigger_samples
+                # Smooth S-curve (hermite) for click-free crossfade
+                blend = t * t * (3.0 - 2.0 * t)
+                curve = (
+                    self._retrigger_start_level * (1.0 - blend)
+                    + self._sustain_level * blend
+                )
+                out[pos:pos + n] = curve
+                self._retrigger_pos += n
+                self._level = float(curve[-1])
+                pos += n
+
+                if self._retrigger_pos >= self._retrigger_samples:
+                    self._level = self._sustain_level
+                    self._stage = Stage.SUSTAIN
 
             elif self._stage == Stage.IDLE:
                 out[pos:pos + remaining] = 0.0

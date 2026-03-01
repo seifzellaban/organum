@@ -156,39 +156,88 @@ class Oscillator:
         self._phase_inc = frequency * TABLE_SIZE / self._sample_rate
 
     def render(self, num_frames: int) -> np.ndarray:
-        """Generate num_frames samples with optional vibrato."""
-        t = np.arange(num_frames, dtype=np.float64)
+        """Generate num_frames samples with optional vibrato.
+
+        Uses pre-allocated work buffers to avoid per-call numpy allocations.
+        """
+        # Get shared work buffers (resized only when block size changes)
+        bufs = _get_work_buffers(num_frames)
+        n = num_frames
+        t = bufs.t[:n]
 
         if self._vibrato_depth > 0:
-            # LFO modulates frequency
-            lfo = np.sin(
-                2 * np.pi * self._vibrato_rate * t / self._sample_rate
-                + self._vibrato_phase
+            # LFO modulates frequency — reuse sliced buffers
+            lfo = bufs.lfo[:n]
+            np.multiply(
+                2 * np.pi * self._vibrato_rate / self._sample_rate, t, out=lfo
             )
-            freq_mod = self._frequency + self._vibrato_depth * lfo
-            phase_incs = freq_mod * TABLE_SIZE / self._sample_rate
-            phases = self._phase + np.cumsum(phase_incs)
+            lfo += self._vibrato_phase
+            np.sin(lfo, out=lfo)
+
+            phases = bufs.phases[:n]
+            np.multiply(lfo, self._vibrato_depth, out=phases)
+            phases += self._frequency
+            phases *= TABLE_SIZE / self._sample_rate
+            np.cumsum(phases, out=phases)
+            phases += self._phase
+
             self._vibrato_phase += (
-                2 * np.pi * self._vibrato_rate * num_frames / self._sample_rate
+                2 * np.pi * self._vibrato_rate * n / self._sample_rate
+            )
+            last_phase_inc = phases[n - 1] - (
+                phases[n - 2] if n > 1 else self._phase
             )
         else:
-            phases = self._phase + self._phase_inc * t
+            phases = bufs.phases[:n]
+            np.multiply(self._phase_inc, t, out=phases)
+            phases += self._phase
+            last_phase_inc = self._phase_inc
 
         # Wrap phase
-        phases = phases % TABLE_SIZE
+        np.mod(phases, TABLE_SIZE, out=phases)
 
-        # Linear interpolation
-        idx = phases.astype(np.int32)
-        frac = (phases - idx).astype(np.float32)
-        idx_next = (idx + 1) & TABLE_MASK
+        # Linear interpolation — reuse sliced index buffers
+        idx = bufs.idx[:n]
+        frac = bufs.frac[:n]
+        np.floor(phases, out=frac)  # temp use of frac as floor
+        np.copyto(idx, frac, casting='unsafe')  # float -> int
+
+        np.subtract(phases, frac, out=frac)  # frac = phases - floor(phases)
+        frac_f32 = frac.astype(np.float32)
+
+        idx_next = bufs.idx_next[:n]
+        np.add(idx, 1, out=idx_next)
+        np.bitwise_and(idx_next, TABLE_MASK, out=idx_next)
 
         table = self._table
-        samples = table[idx] * (1.0 - frac) + table[idx_next] * frac
+        samples = table[idx] * (1.0 - frac_f32) + table[idx_next] * frac_f32
 
         # Advance phase state
-        self._phase = phases[-1] + (
-            self._phase_inc if self._vibrato_depth == 0 else phase_incs[-1]
-        )
-        self._phase = self._phase % TABLE_SIZE
+        self._phase = (phases[n - 1] + last_phase_inc) % TABLE_SIZE
 
         return samples
+
+
+class _WorkBuffers:
+    """Pre-allocated numpy buffers shared by all oscillators to avoid GC pressure."""
+    __slots__ = ("size", "t", "lfo", "phases", "frac", "idx", "idx_next")
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.t = np.arange(size, dtype=np.float64)
+        self.lfo = np.empty(size, dtype=np.float64)
+        self.phases = np.empty(size, dtype=np.float64)
+        self.frac = np.empty(size, dtype=np.float64)
+        self.idx = np.empty(size, dtype=np.int32)
+        self.idx_next = np.empty(size, dtype=np.int32)
+
+
+_work_bufs: _WorkBuffers | None = None
+
+
+def _get_work_buffers(num_frames: int) -> _WorkBuffers:
+    """Return shared work buffers, allocating/resizing only when needed."""
+    global _work_bufs
+    if _work_bufs is None or _work_bufs.size < num_frames:
+        _work_bufs = _WorkBuffers(num_frames)
+    return _work_bufs

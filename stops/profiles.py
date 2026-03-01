@@ -49,8 +49,8 @@ PRINCIPAL_8_DEF = StopDefinition(
     chiff_amount=0.015,
     chiff_ms=12.0,
     wind_noise=0.004,
-    attack_ms=35.0,
-    release_ms=650.0,
+    attack_ms=50.0,
+    release_ms=750.0,
 )
 
 FLUTE_8_DEF = StopDefinition(
@@ -64,8 +64,8 @@ FLUTE_8_DEF = StopDefinition(
     chiff_amount=0.02,
     chiff_ms=20.0,
     wind_noise=0.006,
-    attack_ms=45.0,
-    release_ms=750.0,
+    attack_ms=65.0,
+    release_ms=850.0,
 )
 
 GEDACKT_8_DEF = StopDefinition(
@@ -79,8 +79,8 @@ GEDACKT_8_DEF = StopDefinition(
     chiff_amount=0.018,
     chiff_ms=18.0,
     wind_noise=0.005,
-    attack_ms=40.0,
-    release_ms=700.0,
+    attack_ms=55.0,
+    release_ms=800.0,
 )
 
 OCTAVE_4_DEF = StopDefinition(
@@ -94,8 +94,8 @@ OCTAVE_4_DEF = StopDefinition(
     chiff_amount=0.009, # Reduced from 0.012
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=30.0,
-    release_ms=600.0,
+    attack_ms=42.0,
+    release_ms=700.0,
 )
 
 REED_8_DEF = StopDefinition(
@@ -112,8 +112,8 @@ REED_8_DEF = StopDefinition(
     chiff_amount=0.010,
     chiff_ms=8.0,
     wind_noise=0.003,
-    attack_ms=25.0,
-    release_ms=450.0,
+    attack_ms=35.0,
+    release_ms=550.0,
 )
 
 MIXTURE_DEF = StopDefinition(
@@ -127,8 +127,8 @@ MIXTURE_DEF = StopDefinition(
     chiff_amount=0.012,
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=28.0,
-    release_ms=550.0,
+    attack_ms=40.0,
+    release_ms=650.0,
 )
 
 BOURDON_16_DEF = StopDefinition(
@@ -142,8 +142,8 @@ BOURDON_16_DEF = StopDefinition(
     chiff_amount=0.025,
     chiff_ms=28.0,
     wind_noise=0.007,
-    attack_ms=50.0,
-    release_ms=1000.0,
+    attack_ms=70.0,
+    release_ms=1100.0,
 )
 
 VOX_CELESTE_DEF = StopDefinition(
@@ -158,8 +158,8 @@ VOX_CELESTE_DEF = StopDefinition(
     chiff_amount=0.008,
     chiff_ms=10.0,
     wind_noise=0.003,
-    attack_ms=45.0,
-    release_ms=900.0,
+    attack_ms=65.0,
+    release_ms=1000.0,
 )
 
 # ── New stops — each fills a distinct sonic purpose ──────────────────
@@ -182,8 +182,8 @@ TRUMPET_8_DEF = StopDefinition(
     chiff_amount=0.005,     # Reeds don't chiff — they bark
     chiff_ms=5.0,
     wind_noise=0.002,
-    attack_ms=15.0,          # Very fast, aggressive attack
-    release_ms=350.0,        # Quick cutoff — valve snaps shut
+    attack_ms=22.0,          # Fast but not instant — reeds bark, not click
+    release_ms=450.0,        # Quick cutoff — valve snaps shut
 )
 
 
@@ -202,8 +202,8 @@ SUPER_OCTAVE_2_DEF = StopDefinition(
     chiff_amount=0.007,
     chiff_ms=8.0,
     wind_noise=0.002,
-    attack_ms=22.0,
-    release_ms=500.0,
+    attack_ms=32.0,
+    release_ms=600.0,
 )
 
 # VOIX HUMAINE 8' — Imitative reed that quivers like a human voice.
@@ -222,8 +222,8 @@ VOIX_HUMAINE_DEF = StopDefinition(
     chiff_amount=0.003,
     chiff_ms=4.0,
     wind_noise=0.002,
-    attack_ms=30.0,
-    release_ms=500.0,
+    attack_ms=42.0,
+    release_ms=600.0,
 )
 
 # TREMULANT — Not a pipe rank. A mechanical wind regulator effect.
